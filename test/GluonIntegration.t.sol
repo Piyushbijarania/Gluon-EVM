@@ -145,6 +145,16 @@ contract GluonIntegrationTest is Test {
         internal
         returns (StableCoinReactor)
     {
+        return _deployReactorWithCriticalRatio(oracleAddress, criticalReserveRatio, 0, 0, 1e18);
+    }
+
+    function _deployReactorWithCriticalRatio(
+        address oracleAddress,
+        uint256 criticalReserveRatio,
+        uint256 phi0,
+        uint256 phi1,
+        uint256 decay
+    ) internal returns (StableCoinReactor) {
         address reactorAddr = factory.deployReactor(
             "Gluon Vault",
             "USD Coin",
@@ -159,13 +169,23 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             criticalReserveRatio,
-            INITIAL_RESERVE
+            INITIAL_RESERVE,
+            phi0,
+            phi1,
+            decay
         );
 
         return StableCoinReactor(reactorAddr);
     }
 
     function _deployDecimalReactor(uint8 decimals_, uint256 initialReserve)
+        internal
+        returns (MockDecimalERC20 decimalToken, StableCoinReactor decimalReactor)
+    {
+        return _deployDecimalReactor(decimals_, initialReserve, 0, 0, 1e18);
+    }
+
+    function _deployDecimalReactor(uint8 decimals_, uint256 initialReserve, uint256 phi0, uint256 phi1, uint256 decay)
         internal
         returns (MockDecimalERC20 decimalToken, StableCoinReactor decimalReactor)
     {
@@ -189,7 +209,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            initialReserve
+            initialReserve,
+            phi0,
+            phi1,
+            decay
         );
 
         decimalReactor = StableCoinReactor(reactorAddress);
@@ -219,7 +242,10 @@ contract GluonIntegrationTest is Test {
             fissionFee,
             0,
             15e17,
-            initialReserve
+            initialReserve,
+            0,
+            0,
+            1e18
         );
 
         decimalReactor = StableCoinReactor(reactorAddress);
@@ -380,7 +406,10 @@ contract GluonIntegrationTest is Test {
     }
 
     function testSixDecimalDynamicBetaFeeMatchesEighteenDecimal() public {
-        (MockDecimalERC20 sixDecimalToken, StableCoinReactor sixDecimalReactor) = _deploySixDecimalReactor();
+        _prepareInitialReserve();
+        reactor = _deployReactorWithCriticalRatio(address(adapter), 15e17, 0, 5e17, 1e18);
+        (MockDecimalERC20 sixDecimalToken, StableCoinReactor sixDecimalReactor) =
+            _deployDecimalReactor(6, 100e6, 0, 5e17, 1e18);
 
         address user18 = makeAddr("dynamicBeta18User");
         address user6 = makeAddr("dynamicBeta6User");
@@ -399,12 +428,6 @@ contract GluonIntegrationTest is Test {
         vm.stopPrank();
 
         mockFeed.setPrice(120_000_000);
-
-        vm.prank(treasury);
-        reactor.setBetaParams(0, 5e17, 1e18);
-
-        vm.prank(treasury);
-        sixDecimalReactor.setBetaParams(0, 5e17, 1e18);
 
         // First beta+ establishes the same positive volume ledger in both reactors.
         vm.prank(user18);
@@ -675,7 +698,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            initialReserve
+            initialReserve,
+            0,
+            0,
+            1e18
         );
     }
 
@@ -691,13 +717,12 @@ contract GluonIntegrationTest is Test {
     }
 
     function testTransmutationsRejectZeroOutputAtFullBetaFee() public {
+        _prepareInitialReserve();
+        reactor = _deployReactorWithCriticalRatio(address(adapter), 15e17, 1e18, 0, 1e18);
         address user = makeAddr("fullBetaFeeUser");
 
         _fundAndFission(user, 100e18);
         _adjustIntoOperatingRange();
-
-        vm.prank(treasury);
-        reactor.setBetaParams(1e18, 0, 1e18);
 
         vm.startPrank(user);
 
@@ -840,7 +865,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            INITIAL_RESERVE
+            INITIAL_RESERVE,
+            0,
+            0,
+            1e18
         );
 
         assertEq(factory.getDeployedReactorsCount(), countBefore, "failed deployment should not be registered");
@@ -877,7 +905,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            INITIAL_RESERVE
+            INITIAL_RESERVE,
+            0,
+            0,
+            1e18
         );
     }
 
@@ -918,7 +949,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            INITIAL_RESERVE
+            INITIAL_RESERVE,
+            0,
+            0,
+            1e18
         );
     }
 
@@ -959,7 +993,10 @@ contract GluonIntegrationTest is Test {
                 fissionFee,
                 0,
                 15e17,
-                requestedReserve
+                requestedReserve,
+                0,
+                0,
+                1e18
             )
         );
 
@@ -1073,7 +1110,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            tinyReserve
+            tinyReserve,
+            0,
+            0,
+            1e18
         );
     }
 
@@ -1139,7 +1179,10 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            requestedReserve
+            requestedReserve,
+            0,
+            0,
+            1e18
         );
 
         assertEq(StableCoinReactor(reactorAddress).reserve(), receivedReserve, "wrong received reserve");
@@ -1167,7 +1210,10 @@ contract GluonIntegrationTest is Test {
                 1e17,
                 0,
                 15e17,
-                requestedReserve
+                requestedReserve,
+                0,
+                0,
+                1e18
             )
         );
 
@@ -1220,7 +1266,10 @@ contract GluonIntegrationTest is Test {
                 1e17,
                 0,
                 15e17,
-                INITIAL_RESERVE
+                INITIAL_RESERVE,
+                0,
+                0,
+                1e18
             )
         );
 

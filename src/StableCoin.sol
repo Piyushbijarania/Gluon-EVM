@@ -36,7 +36,6 @@ contract StableCoinReactor is ReentrancyGuard {
     error EmptyPegSymbol();
     error EmptyProtonName();
     error EmptyProtonSymbol();
-    error OnlyTreasury();
     error InvalidPhi();
     error InvalidDecay();
     error AmountZero();
@@ -77,9 +76,9 @@ contract StableCoinReactor is ReentrancyGuard {
     uint256 public alpha = WAD;
 
     // β fee parameters
-    uint256 public betaPhi0;
-    uint256 public betaPhi1;
-    uint256 public decayPerSecondWad;
+    uint256 public immutable betaPhi0;
+    uint256 public immutable betaPhi1;
+    uint256 public immutable decayPerSecondWad;
     int256 private decayedVolumeBase;
     uint256 private lastDecayTs;
 
@@ -115,7 +114,6 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 feeWad,
         int256 newDecayedVolumeBase
     );
-    event BetaParamsSet(uint256 phi0, uint256 phi1, uint256 decayPerSecondWad);
     event PegAdjusted(uint256 previousAlpha, uint256 newAlpha, uint256 reserveRatio);
 
     constructor(
@@ -131,7 +129,10 @@ contract StableCoinReactor is ReentrancyGuard {
         address treasuryParam,
         uint256 fissionFeeParam,
         uint256 fusionFeeParam,
-        uint256 criticalReserveRatioWadParam
+        uint256 criticalReserveRatioWadParam,
+        uint256 betaPhi0Param,
+        uint256 betaPhi1Param,
+        uint256 decayPerSecondWadParam
     ) {
         if (baseTokenParam == address(0) || baseTokenParam.code.length == 0) {
             revert InvalidBaseToken();
@@ -152,6 +153,8 @@ contract StableCoinReactor is ReentrancyGuard {
         if (treasuryParam == address(0)) revert InvalidTreasury();
         if (fissionFeeParam >= WAD) revert InvalidFissionFee();
         if (fusionFeeParam >= WAD) revert InvalidFusionFee();
+        if (betaPhi0Param > WAD || betaPhi1Param > WAD) revert InvalidPhi();
+        if (decayPerSecondWadParam > WAD) revert InvalidDecay();
         if (criticalReserveRatioWadParam < WAD || criticalReserveRatioWadParam >= UPPER_RESERVE_RATIO) {
             revert InvalidCriticalReserveRatio();
         }
@@ -182,25 +185,10 @@ contract StableCoinReactor is ReentrancyGuard {
         FISSION_FEE = fissionFeeParam;
         FUSION_FEE = fusionFeeParam;
 
-        // default β-params: no fee, no decay (can be set later by TREASURY)
-        betaPhi0 = 0;
-        betaPhi1 = 0;
-        decayPerSecondWad = WAD; // no decay
-        lastDecayTs = block.timestamp;
-    }
-
-    modifier onlyTreasury() {
-        if (msg.sender != TREASURY) revert OnlyTreasury();
-        _;
-    }
-
-    function setBetaParams(uint256 phi0, uint256 phi1, uint256 decayPerSecondWadParam) external onlyTreasury {
-        if (phi0 > WAD || phi1 > WAD) revert InvalidPhi();
-        if (decayPerSecondWadParam > WAD) revert InvalidDecay();
-        betaPhi0 = phi0;
-        betaPhi1 = phi1;
+        betaPhi0 = betaPhi0Param;
+        betaPhi1 = betaPhi1Param;
         decayPerSecondWad = decayPerSecondWadParam;
-        emit BetaParamsSet(phi0, phi1, decayPerSecondWadParam);
+        lastDecayTs = block.timestamp;
     }
 
     function reserve() public view returns (uint256) {

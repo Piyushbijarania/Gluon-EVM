@@ -182,7 +182,10 @@ contract GenericIOracleIntegrationTest is Test {
             0,
             0,
             15e17,
-            INITIAL_RESERVE
+            INITIAL_RESERVE,
+            0,
+            0,
+            1e18
         );
 
         return StableCoinReactor(reactorAddress);

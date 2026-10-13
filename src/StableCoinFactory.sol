@@ -62,7 +62,10 @@ contract StableCoinFactory {
         uint256 fissionFeeParam,
         uint256 fusionFeeParam,
         uint256 criticalReserveRatioWadParam,
-        uint256 initialReserveParam
+        uint256 initialReserveParam,
+        uint256 betaPhi0Param,
+        uint256 betaPhi1Param,
+        uint256 decayPerSecondWadParam
     ) public returns (address) {
         if (bytes(vaultNameParam).length == 0) revert EmptyVaultName();
         if (bytes(baseAssetNameParam).length == 0) revert EmptyBaseName();
@@ -92,7 +95,10 @@ contract StableCoinFactory {
             treasuryParam,
             fissionFeeParam,
             fusionFeeParam,
-            criticalReserveRatioWadParam
+            criticalReserveRatioWadParam,
+            betaPhi0Param,
+            betaPhi1Param,
+            decayPerSecondWadParam
         );
 
         address reactorAddress = address(reactor);
