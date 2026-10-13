@@ -150,7 +150,7 @@ The `ChainlinkToOracleAdapter`:
 The system has two main parts:
 
 1. the **reactor flow** for user interactions and token mint/burn logic
-2. the **deployment and oracle flow** for factory deployment, pricing, and treasury control
+2. the **deployment and oracle flow** for factory deployment, pricing, and treasury fee collection
 
 ### Reactor Flow
 
@@ -387,7 +387,7 @@ The current deployment script can deploy:
 
 The `StableCoinFactory` constructor does not require any parameters.
 
-The deployment wallet becomes the owner of the factory.
+The factory has no owner; reactor deployment is permissionless.
 
 The `ChainlinkToOracleAdapter` constructor requires one parameter:
 
