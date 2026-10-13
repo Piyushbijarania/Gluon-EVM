@@ -90,7 +90,7 @@ contract GluonIntegrationTest is Test {
     address treasury = makeAddr("treasury");
     uint256 internal constant INITIAL_RESERVE = 100e18;
 
-    event PegAdjusted(uint256 previousAlpha, uint256 newAlpha, uint256 reserveRatio);
+    event PegAdjusted(uint256 previousPegFactor, uint256 newPegFactor, uint256 reserveRatio);
 
     event Fission(
         address indexed from,
@@ -1281,14 +1281,14 @@ contract GluonIntegrationTest is Test {
         assertEq(feeReactor.reserveRatioPeggedAsset(), 15e17, "initial ratio changed after fee");
     }
 
-    function testFissionAfterAlphaAdjustmentKeepsProportionalAccounting() public {
+    function testFissionAfterPegFactorAdjustmentKeepsProportionalAccounting() public {
         address firstUser = makeAddr("alphaSetupUser");
         _fundAndFission(firstUser, 100e18);
 
         mockFeed.setPrice(2e8);
         _adjustIntoOperatingRange();
 
-        assertGt(reactor.alpha(), 1e18, "precondition: alpha should be above one");
+        assertGt(reactor.pegFactor(), reactor.PEG_FACTOR_SCALE(), "precondition: pegFactor should be above one");
 
         uint256 ratioBefore = reactor.reserveRatioPeggedAsset();
         uint256 reserveBefore = reactor.reserve();
@@ -1312,11 +1312,14 @@ contract GluonIntegrationTest is Test {
             reactor.NEUTRON_TOKEN().balanceOf(user),
             expectedNeutronOut,
             100,
-            "wrong neutron output after alpha adjustment"
+            "wrong neutron output after pegFactor adjustment"
         );
 
         assertApproxEqAbs(
-            reactor.PROTON_TOKEN().balanceOf(user), expectedProtonOut, 100, "wrong proton output after alpha adjustment"
+            reactor.PROTON_TOKEN().balanceOf(user),
+            expectedProtonOut,
+            100,
+            "wrong proton output after pegFactor adjustment"
         );
 
         assertApproxEqAbs(reactor.reserveRatioPeggedAsset(), ratioBefore, 100, "fission should preserve reserve ratio");
@@ -1628,7 +1631,7 @@ contract GluonIntegrationTest is Test {
         reactor.fusion(1e18, user);
     }
 
-    function testAdjustPegIncreasesAlphaAboveUpperBound() public {
+    function testAdjustPegIncreasesPegFactorAboveUpperBound() public {
         address user = makeAddr("highRatioUser");
 
         _fundAndFission(user, 100e18);
@@ -1637,32 +1640,32 @@ contract GluonIntegrationTest is Test {
         uint256 ratioBefore = reactor.reserveRatioPeggedAsset();
         assertGt(ratioBefore, reactor.UPPER_RESERVE_RATIO(), "precondition: ratio should be above 200%");
 
-        uint256 alphaBefore = reactor.alpha();
-        uint256 expectedAlpha = (alphaBefore * reactor.ALPHA_UP_FACTOR()) / 1e18;
+        uint256 pegFactorBefore = reactor.pegFactor();
+        uint256 expectedPegFactor = (pegFactorBefore * reactor.PEG_UP_FACTOR_WAD()) / 1e18;
 
         vm.expectEmit(false, false, false, true, address(reactor));
-        emit PegAdjusted(alphaBefore, expectedAlpha, ratioBefore);
+        emit PegAdjusted(pegFactorBefore, expectedPegFactor, ratioBefore);
 
         reactor.adjustPeg();
 
         uint256 ratioAfter = reactor.reserveRatioPeggedAsset();
 
-        assertEq(reactor.alpha(), expectedAlpha, "alpha should increase by 1%");
-        assertLt(ratioAfter, ratioBefore, "increasing alpha should decrease reserve ratio");
+        assertEq(reactor.pegFactor(), expectedPegFactor, "pegFactor should increase by 1%");
+        assertLt(ratioAfter, ratioBefore, "increasing pegFactor should decrease reserve ratio");
     }
 
-    function testAdjustPegDoesNotChangeAlphaAtZeroOraclePrice() public {
+    function testAdjustPegDoesNotChangePegFactorAtZeroOraclePrice() public {
         mockFeed.setPrice(0);
 
-        uint256 alphaBefore = reactor.alpha();
+        uint256 pegFactorBefore = reactor.pegFactor();
 
         reactor.adjustPeg();
 
-        assertEq(reactor.alpha(), alphaBefore, "zero oracle price should not change alpha");
+        assertEq(reactor.pegFactor(), pegFactorBefore, "zero oracle price should not change pegFactor");
         assertEq(reactor.reserveRatioPeggedAsset(), 0, "zero oracle price should produce zero reserve ratio");
     }
 
-    function testAdjustPegDecreasesAlphaBelowCriticalRatio() public {
+    function testAdjustPegDecreasesPegFactorBelowCriticalRatio() public {
         address user = makeAddr("lowRatioUser");
 
         _fundAndFission(user, 100e18);
@@ -1673,15 +1676,15 @@ contract GluonIntegrationTest is Test {
             ratioBefore, reactor.CRITICAL_RESERVE_RATIO(), "precondition: ratio should be below critical reserve ratio"
         );
 
-        uint256 alphaBefore = reactor.alpha();
-        uint256 expectedAlpha = (alphaBefore * reactor.ALPHA_DOWN_FACTOR()) / 1e18;
+        uint256 pegFactorBefore = reactor.pegFactor();
+        uint256 expectedPegFactor = (pegFactorBefore * reactor.PEG_DOWN_FACTOR_WAD()) / 1e18;
 
         reactor.adjustPeg();
 
         uint256 ratioAfter = reactor.reserveRatioPeggedAsset();
 
-        assertEq(reactor.alpha(), expectedAlpha, "alpha should decrease by 1%");
-        assertGt(ratioAfter, ratioBefore, "decreasing alpha should increase reserve ratio");
+        assertEq(reactor.pegFactor(), expectedPegFactor, "pegFactor should decrease by 1%");
+        assertGt(ratioAfter, ratioBefore, "decreasing pegFactor should increase reserve ratio");
     }
 
     function testRepeatedAdjustPegFromHighRatioReturnsToOperatingRange() public {
@@ -1706,7 +1709,7 @@ contract GluonIntegrationTest is Test {
         assertGt(iterations, 0, "expected at least one adjustment");
         assertLe(finalRatio, reactor.UPPER_RESERVE_RATIO(), "ratio should return below upper bound");
         assertGe(finalRatio, reactor.CRITICAL_RESERVE_RATIO(), "ratio should remain above critical ratio");
-        assertGt(reactor.alpha(), 1e18, "alpha should increase from one");
+        assertGt(reactor.pegFactor(), reactor.PEG_FACTOR_SCALE(), "pegFactor should increase from one");
 
         vm.expectRevert(StableCoinReactor.PegAdjustmentNotNeeded.selector);
         reactor.adjustPeg();
@@ -1735,7 +1738,7 @@ contract GluonIntegrationTest is Test {
         assertGt(iterations, 0, "expected at least one adjustment");
         assertGe(finalRatio, reactor.CRITICAL_RESERVE_RATIO(), "ratio should return above critical ratio");
         assertLe(finalRatio, reactor.UPPER_RESERVE_RATIO(), "ratio should remain below upper bound");
-        assertLt(reactor.alpha(), 1e18, "alpha should decrease from one");
+        assertLt(reactor.pegFactor(), reactor.PEG_FACTOR_SCALE(), "pegFactor should decrease from one");
 
         vm.expectRevert(StableCoinReactor.PegAdjustmentNotNeeded.selector);
         reactor.adjustPeg();
@@ -1783,7 +1786,7 @@ contract GluonIntegrationTest is Test {
         assertEq(reactor.protonPriceInBase(), expectedProtonPrice, "proton price should equal equity per proton");
     }
 
-    function testAlphaStartsAtWad() public view {
-        assertEq(reactor.alpha(), 1e18, "alpha should start at 1");
+    function testPegFactorStartsAtItsScale() public view {
+        assertEq(reactor.pegFactor(), reactor.PEG_FACTOR_SCALE(), "pegFactor should start at 1");
     }
 }

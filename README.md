@@ -135,6 +135,11 @@ Gluon reads the reserve asset price through the shared `IOracle` interface.
 
 Oracle values are expected in **WAD format**, meaning 18 decimals.
 
+The reactor's dimensionless `pegFactor` uses 36 decimals, with `1e36` representing
+one. `adjustPeg()` applies 1% step coefficients when the reserve ratio is outside its
+operating range. Downward adjustments keep it positive; upward adjustments round
+up to preserve progress. Prices, fees and reserve accounting remain WAD-scaled.
+
 The `ChainlinkToOracleAdapter`:
 
 - reads the latest Chainlink feed value

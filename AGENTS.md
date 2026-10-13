@@ -27,6 +27,10 @@ All oracle prices and protocol fixed-point values are normalized to **18 decimal
 - **Division:** `(valA * 1e18) / valB`
 - **Inversion:** `(1e18 * 1e18) / val`
 
+The dimensionless `pegFactor` uses 36 decimals with `PEG_FACTOR_SCALE = 1e36`.
+Use that scale when applying or inverting the peg factor; oracle prices, fees,
+reserve amounts and peg-adjustment step coefficients still use WAD.
+
 ### 2. Custom Errors
 Always use Solidity custom errors instead of `require` statements with strings. Declare them globally or at the top of contracts:
 
