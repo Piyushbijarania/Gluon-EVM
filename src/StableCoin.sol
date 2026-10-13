@@ -583,9 +583,13 @@ contract StableCoinReactor is ReentrancyGuard {
         protonOut = Math.mulDiv(netBase, WAD, protonPriceBase);
         if (protonOut == 0) revert AmountTooSmall();
 
+        int256 newVolume = decayedVolumeBase - _grossBaseToInt(grossBase);
+        // Fee and decay calculations negate negative volume; int256.min cannot be negated.
+        if (newVolume == type(int256).min) revert MathOverflow();
+
         NEUTRON_TOKEN.burn(msg.sender, neutronIn);
         PROTON_TOKEN.mint(to, protonOut);
-        decayedVolumeBase -= _grossBaseToInt(grossBase);
+        decayedVolumeBase = newVolume;
 
         emit TransmuteMinus(msg.sender, to, neutronIn, protonOut, feeWad, decayedVolumeBase);
     }
