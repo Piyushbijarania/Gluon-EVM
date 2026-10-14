@@ -18,8 +18,10 @@ contract StableCoinReactor is ReentrancyGuard {
     uint256 public constant PEGGED_ASSET_WAD = 1e18; // peg target
     uint256 public constant UPPER_RESERVE_RATIO = 2e18;
     uint256 internal constant INITIAL_RESERVE_RATIO = 15e17;
-    uint256 public constant ALPHA_DOWN_FACTOR = 99e16;
-    uint256 public constant ALPHA_UP_FACTOR = 101e16;
+    // Prices and step coefficients remain WAD; the dimensionless peg factor has 36 decimals.
+    uint256 public constant PEG_FACTOR_SCALE = 1e36;
+    uint256 public constant PEG_DOWN_FACTOR_WAD = 99e16;
+    uint256 public constant PEG_UP_FACTOR_WAD = 101e16;
 
     error InvalidBaseToken();
     error InvalidBaseTokenDecimals(uint8 decimals);
@@ -73,7 +75,7 @@ contract StableCoinReactor is ReentrancyGuard {
     uint256 public immutable FUSION_FEE;
     uint256 public immutable CRITICAL_RESERVE_RATIO;
 
-    uint256 public alpha = WAD;
+    uint256 public pegFactor = PEG_FACTOR_SCALE;
 
     // β fee parameters
     uint256 public immutable betaPhi0;
@@ -114,7 +116,7 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 feeWad,
         int256 newDecayedVolumeBase
     );
-    event PegAdjusted(uint256 previousAlpha, uint256 newAlpha, uint256 reserveRatio);
+    event PegAdjusted(uint256 previousPegFactor, uint256 newPegFactor, uint256 reserveRatio);
 
     constructor(
         string memory vaultNameParam,
@@ -255,7 +257,7 @@ contract StableCoinReactor is ReentrancyGuard {
         if (basePrice == 0) return type(uint256).max;
 
         uint256 targetPriceBase = Math.mulDiv(PEGGED_ASSET_WAD, WAD, basePrice);
-        return Math.mulDiv(targetPriceBase, alpha, WAD);
+        return Math.mulDiv(targetPriceBase, pegFactor, PEG_FACTOR_SCALE);
     }
 
     function _reserveRatioWad(uint256 normalizedReserve, uint256 neutronSupplyTokens, uint256 basePrice)
@@ -267,7 +269,7 @@ contract StableCoinReactor is ReentrancyGuard {
         if (neutronSupplyTokens == 0) return type(uint256).max;
         if (basePrice == 0) return 0;
 
-        uint256 adjustedNeutronSupply = Math.mulDiv(neutronSupplyTokens, alpha, WAD);
+        uint256 adjustedNeutronSupply = Math.mulDiv(neutronSupplyTokens, pegFactor, PEG_FACTOR_SCALE);
         if (adjustedNeutronSupply == 0) return type(uint256).max;
 
         return Math.mulDiv(normalizedReserve, basePrice, adjustedNeutronSupply);
@@ -335,17 +337,17 @@ contract StableCoinReactor is ReentrancyGuard {
         if (basePrice == 0) return;
 
         uint256 reserveRatio = _reserveRatioWad(normalizedReserve, neutronSupplyTotal, basePrice);
-        uint256 previousAlpha = alpha;
+        uint256 previousPegFactor = pegFactor;
 
         if (reserveRatio < CRITICAL_RESERVE_RATIO) {
-            alpha = Math.mulDiv(previousAlpha, ALPHA_DOWN_FACTOR, WAD);
+            pegFactor = Math.max(1, Math.mulDiv(previousPegFactor, PEG_DOWN_FACTOR_WAD, WAD));
         } else if (reserveRatio > UPPER_RESERVE_RATIO) {
-            alpha = Math.mulDiv(previousAlpha, ALPHA_UP_FACTOR, WAD);
+            pegFactor = Math.mulDiv(previousPegFactor, PEG_UP_FACTOR_WAD, WAD, Math.Rounding.Ceil);
         } else {
             revert PegAdjustmentNotNeeded();
         }
 
-        emit PegAdjusted(previousAlpha, alpha, reserveRatio);
+        emit PegAdjusted(previousPegFactor, pegFactor, reserveRatio);
     }
 
     function fission(uint256 amountIn, address to) external nonReentrant {
@@ -370,9 +372,9 @@ contract StableCoinReactor is ReentrancyGuard {
     {
         uint256 protonSupplyBefore = PROTON_TOKEN.totalSupply();
 
-        // adjustPeg() is not nonReentrant, so a hook-bearing base token could change alpha
-        // during the transfer below. Keep the mint calculation on one pre-transfer alpha snapshot.
-        uint256 alphaBefore = alpha;
+        // adjustPeg() is not nonReentrant, so a hook-bearing base token could change pegFactor
+        // during the transfer below. Keep the mint calculation on one pre-transfer pegFactor snapshot.
+        uint256 pegFactorBefore = pegFactor;
         uint256 neutronPriceBase;
         if (protonSupplyBefore == 0) {
             neutronPriceBase = _normalizedTargetPriceInBase(basePrice);
@@ -392,7 +394,7 @@ contract StableCoinReactor is ReentrancyGuard {
         if (net == 0) revert AmountTooSmall();
         uint256 reserveBefore = _baseToWad(reserveBaseline);
 
-        uint256 adjustedBasePrice = Math.mulDiv(basePrice, WAD, alphaBefore);
+        uint256 adjustedBasePrice = Math.mulDiv(basePrice, PEG_FACTOR_SCALE, pegFactorBefore);
         neutronOut = Math.mulDiv(net, adjustedBasePrice, reserveRatio);
 
         if (protonSupplyBefore == 0) {
