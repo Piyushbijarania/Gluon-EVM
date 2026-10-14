@@ -44,7 +44,6 @@ contract StableCoinReactor is ReentrancyGuard {
     error AmountTooSmall();
     error EmptyReserve();
     error EmptySupply();
-    error MathOverflow();
     error InvalidInitialReserve();
     error OnlyFactory();
     error AlreadyInitialized();
@@ -81,7 +80,8 @@ contract StableCoinReactor is ReentrancyGuard {
     uint256 public immutable betaPhi0;
     uint256 public immutable betaPhi1;
     uint256 public immutable decayPerSecondWad;
-    int256 private decayedVolumeBase;
+    uint256 private decayedVolumePlusBase;
+    uint256 private decayedVolumeMinusBase;
     uint256 private lastDecayTs;
 
     event Fission(
@@ -106,7 +106,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 protonIn,
         uint256 neutronOut,
         uint256 feeWad,
-        int256 newDecayedVolumeBase
+        uint256 newDecayedVolumePlusBase,
+        uint256 newDecayedVolumeMinusBase
     );
     event TransmuteMinus(
         address indexed from,
@@ -114,7 +115,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronIn,
         uint256 protonOut,
         uint256 feeWad,
-        int256 newDecayedVolumeBase
+        uint256 newDecayedVolumePlusBase,
+        uint256 newDecayedVolumeMinusBase
     );
     event PegAdjusted(uint256 previousPegFactor, uint256 newPegFactor, uint256 reserveRatio);
 
@@ -466,43 +468,31 @@ contract StableCoinReactor is ReentrancyGuard {
             return;
         }
         uint256 d = _rpow(decayPerSecondWad, dt);
-        if (decayedVolumeBase != 0) {
-            int256 v = decayedVolumeBase;
-            if (v > 0) {
-                // v > 0 and d <= WAD, so the converted result remains within int256 range.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                decayedVolumeBase = int256(Math.mulDiv(uint256(v), d, WAD));
-            } else {
-                // v < 0 here; Solidity's checked -v preserves the existing overflow protection.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                decayedVolumeBase = -int256(Math.mulDiv(uint256(-v), d, WAD));
-            }
-        }
+        decayedVolumePlusBase = Math.mulDiv(decayedVolumePlusBase, d, WAD);
+        decayedVolumeMinusBase = Math.mulDiv(decayedVolumeMinusBase, d, WAD);
         lastDecayTs = t;
     }
 
     function _betaPlusFeeWad(uint256 normalizedReserve) internal view returns (uint256) {
-        if (normalizedReserve == 0) return WAD;
-        if (betaPhi0 == 0 && betaPhi1 == 0) return 0;
-        int256 v = decayedVolumeBase;
-        // The conversion is evaluated only when v > 0.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 pos = v > 0 ? uint256(v) : 0;
-        uint256 term = Math.mulDiv(betaPhi1, pos, normalizedReserve);
-        uint256 f = betaPhi0 + term;
-        return f > WAD ? WAD : f;
+        uint256 volume =
+            decayedVolumePlusBase > decayedVolumeMinusBase ? decayedVolumePlusBase - decayedVolumeMinusBase : 0;
+        return _betaFeeWad(normalizedReserve, volume);
     }
 
     function _betaMinusFeeWad(uint256 normalizedReserve) internal view returns (uint256) {
+        uint256 volume =
+            decayedVolumeMinusBase > decayedVolumePlusBase ? decayedVolumeMinusBase - decayedVolumePlusBase : 0;
+        return _betaFeeWad(normalizedReserve, volume);
+    }
+
+    function _betaFeeWad(uint256 normalizedReserve, uint256 volume) internal view returns (uint256) {
         if (normalizedReserve == 0) return WAD;
-        if (betaPhi0 == 0 && betaPhi1 == 0) return 0;
-        int256 v = decayedVolumeBase;
-        // The conversion is evaluated only when v < 0; checked -v preserves overflow protection.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 neg = v < 0 ? uint256(-v) : 0;
-        uint256 term = Math.mulDiv(betaPhi1, neg, normalizedReserve);
-        uint256 f = betaPhi0 + term;
-        return f > WAD ? WAD : f;
+        if (betaPhi1 == 0) return betaPhi0;
+        // betaPhi1 is at least 1, so this ratio already implies a capped fee.
+        // Check it before mulDiv to avoid overflowing an uncapped intermediate.
+        if (volume / normalizedReserve >= WAD) return WAD;
+        uint256 term = Math.mulDiv(betaPhi1, volume, normalizedReserve);
+        return Math.min(betaPhi0 + term, WAD);
     }
 
     function transmuteProtonToNeutron(uint256 protonIn, address to)
@@ -540,12 +530,14 @@ contract StableCoinReactor is ReentrancyGuard {
             revert ResultingReserveRatioBelowCritical();
         }
 
+        uint256 newVolume = decayedVolumePlusBase + grossBase;
+
         PROTON_TOKEN.burn(msg.sender, protonIn);
         NEUTRON_TOKEN.mint(to, neutronOut);
 
-        decayedVolumeBase += _grossBaseToInt(grossBase);
+        decayedVolumePlusBase = newVolume;
 
-        emit TransmutePlus(msg.sender, to, protonIn, neutronOut, feeWad, decayedVolumeBase);
+        emit TransmutePlus(msg.sender, to, protonIn, neutronOut, feeWad, newVolume, decayedVolumeMinusBase);
     }
 
     /**
@@ -583,15 +575,13 @@ contract StableCoinReactor is ReentrancyGuard {
         protonOut = Math.mulDiv(netBase, WAD, protonPriceBase);
         if (protonOut == 0) revert AmountTooSmall();
 
-        int256 newVolume = decayedVolumeBase - _grossBaseToInt(grossBase);
-        // Fee and decay calculations negate negative volume; int256.min cannot be negated.
-        if (newVolume == type(int256).min) revert MathOverflow();
+        uint256 newVolume = decayedVolumeMinusBase + grossBase;
 
         NEUTRON_TOKEN.burn(msg.sender, neutronIn);
         PROTON_TOKEN.mint(to, protonOut);
-        decayedVolumeBase = newVolume;
+        decayedVolumeMinusBase = newVolume;
 
-        emit TransmuteMinus(msg.sender, to, neutronIn, protonOut, feeWad, decayedVolumeBase);
+        emit TransmuteMinus(msg.sender, to, neutronIn, protonOut, feeWad, decayedVolumePlusBase, newVolume);
     }
 
     function _neutronPriceInBase(uint256 normalizedReserve, uint256 neutronSupplyTokens, uint256 basePrice)
@@ -632,12 +622,5 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 equity = normalizedReserve - liabilities;
 
         return Math.mulDiv(equity, WAD, protonSupplyTokens);
-    }
-
-    function _grossBaseToInt(uint256 value) internal pure returns (int256) {
-        if (value > uint256(type(int256).max)) revert MathOverflow();
-        // The explicit bound check guarantees value fits in int256.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        return int256(value);
     }
 }
