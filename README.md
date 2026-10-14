@@ -146,7 +146,7 @@ The `ChainlinkToOracleAdapter`:
 #### Oracle Staleness
 
 Gluon intentionally does not reject an oracle price because of its age. If an oracle
-stopped updating permanently, a freshness timeout could prevent reserve redemptions
+stopped updating permanently, a freshness timeout could preserve redemptions
 indefinitely. Gluon accepts the risk of stale pricing rather than adding this
 age-based restriction. Other operation checks still apply.
 
@@ -155,11 +155,11 @@ Nonzero prices are cached by state-changing operations only when the whole opera
 completes; view calls do not update the cache. This fallback supports oracles through
 the shared `IOracle` interface and does not depend on Chainlink round metadata.
 
-When volume-dependent beta fees are enabled, an increase in a direction's recorded
+Volume-dependent beta decay fees should always be enabled; an increase in a direction's recorded
 volume can raise its transmutation fee, counteracting trading against a mispriced
 oracle. This is a mitigation, not a guarantee of accurate pricing: opposing trades
-and decay also affect the volume ledger, and the volume-dependent fee is disabled
-by default. Freshness timeouts should not be added as a routine oracle bug fix.
+and decay also affect the volume ledger.
+Freshness timeouts should not be added as a routine oracle bug fix.
 
 ---
 
