@@ -2,11 +2,10 @@
 pragma solidity ^0.8.20;
 
 import {StableCoinReactor} from "./StableCoin.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract StableCoinFactory is Ownable {
+contract StableCoinFactory {
     using SafeERC20 for IERC20;
 
     event ReactorDeployed(
@@ -45,8 +44,6 @@ contract StableCoinFactory is Ownable {
     error InvalidCriticalReserveRatio();
     error InvalidInitialReserve();
 
-    constructor() Ownable(msg.sender) {}
-
     /**
      * Deploy a new Reactor
      * @param oracleParam      Address of an IOracle-compatible adapter
@@ -65,7 +62,10 @@ contract StableCoinFactory is Ownable {
         uint256 fissionFeeParam,
         uint256 fusionFeeParam,
         uint256 criticalReserveRatioWadParam,
-        uint256 initialReserveParam
+        uint256 initialReserveParam,
+        uint256 betaPhi0Param,
+        uint256 betaPhi1Param,
+        uint256 decayPerSecondWadParam
     ) public returns (address) {
         if (bytes(vaultNameParam).length == 0) revert EmptyVaultName();
         if (bytes(baseAssetNameParam).length == 0) revert EmptyBaseName();
@@ -95,7 +95,10 @@ contract StableCoinFactory is Ownable {
             treasuryParam,
             fissionFeeParam,
             fusionFeeParam,
-            criticalReserveRatioWadParam
+            criticalReserveRatioWadParam,
+            betaPhi0Param,
+            betaPhi1Param,
+            decayPerSecondWadParam
         );
 
         address reactorAddress = address(reactor);

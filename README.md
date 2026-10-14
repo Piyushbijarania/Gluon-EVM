@@ -76,7 +76,7 @@ Gluon also supports **transmutation**, allowing value to move between Proton and
 - **Generic oracle interface** — use any oracle implementation compatible with `IOracle`
 - **Chainlink support** — normalize Chainlink price-feed values to 18-decimal WAD format
 - **Configurable fees** — separate fission and fusion fees
-- **Dynamic beta fees** — treasury-controlled parameters for transmutation fees and decay
+- **Dynamic beta fees** — transmutation fee and decay parameters chosen at deployment and immutable afterwards
 - **On-chain pricing views** — expose reserve ratio and Proton/Neutron price calculations
 - **Foundry test suite** — unit and integration tests for adapters, factory deployment, and reactor flows
 - **Continuous integration** — formatting, build, and test checks through GitHub Actions
@@ -135,6 +135,11 @@ Gluon reads the reserve asset price through the shared `IOracle` interface.
 
 Oracle values are expected in **WAD format**, meaning 18 decimals.
 
+The reactor's dimensionless `pegFactor` uses 36 decimals, with `1e36` representing
+one. `adjustPeg()` applies 1% step coefficients when the reserve ratio is outside its
+operating range. Downward adjustments keep it positive; upward adjustments round
+up to preserve progress. Prices, fees and reserve accounting remain WAD-scaled.
+
 The `ChainlinkToOracleAdapter`:
 
 - reads the latest Chainlink feed value
@@ -150,7 +155,7 @@ The `ChainlinkToOracleAdapter`:
 The system has two main parts:
 
 1. the **reactor flow** for user interactions and token mint/burn logic
-2. the **deployment and oracle flow** for factory deployment, pricing, and treasury control
+2. the **deployment and oracle flow** for factory deployment, pricing, and treasury fee collection
 
 ### Reactor Flow
 
@@ -387,7 +392,7 @@ The current deployment script can deploy:
 
 The `StableCoinFactory` constructor does not require any parameters.
 
-The deployment wallet becomes the owner of the factory.
+The factory has no owner; reactor deployment is permissionless.
 
 The `ChainlinkToOracleAdapter` constructor requires one parameter:
 
@@ -493,6 +498,9 @@ fissionFee
 fusionFee
 criticalReserveRatio
 initialReserve
+betaPhi0
+betaPhi1
+decayPerSecondWad
 ```
 
 ### Validation Rules
@@ -505,6 +513,8 @@ The reactor validates that:
 - the treasury address is not zero
 - the fission fee is below `1e18`
 - the fusion fee is below `1e18`
+- each beta fee coefficient is at most `1e18`
+- the per-second volume retention multiplier is at most `1e18`
 - the critical reserve ratio is at least `1e18` and below the upper reserve ratio
 - the initial reserve is non-zero and can establish a valid initialized reserve state
 - the vault name is not empty
@@ -554,19 +564,21 @@ function transmuteNeutronToProton(
 
 Burns Neutron and mints the corresponding Proton amount after applying the beta fee.
 
-### Set Beta Parameters
+### Immutable Beta Parameters
 
-```solidity
-function setBetaParams(
-    uint256 phi0,
-    uint256 phi1,
-    uint256 decayPerSecondWad
-) external
-```
+The deployer chooses `betaPhi0`, `betaPhi1`, and `decayPerSecondWad` through the
+factory when creating each reactor. The constructor validates and stores these
+values as immutable configuration; neither the deployer nor the treasury can
+change them afterwards. There is no beta-parameter setter.
 
-Updates the reactor's transmutation-fee parameters.
+`betaPhi0` is the base transmutation fee and `betaPhi1` controls the volume-dependent
+fee. Both use 18-decimal WAD units. `decayPerSecondWad` is the fraction of the volume
+ledger retained each second: `1e18` means no decay, and `0` clears past volume when
+at least one second has elapsed. Passing `(0, 0, 1e18)` preserves the previous
+default behavior. Different reactors may choose different fixed settings.
 
-Only the configured treasury can call this function.
+The factory is permissionless and has no owner. These constructor and factory
+interface changes apply to new deployments; existing deployed contracts are unchanged.
 
 ---
 
