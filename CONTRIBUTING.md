@@ -787,6 +787,9 @@ Consumers are responsible for deciding whether an oracle value is too old for th
 
 Do not add independent staleness-revert behavior inside an oracle integration without prior discussion because it can change integration semantics.
 
+Gluon's intentional staleness policy and its rationale are described in the
+[Oracle Staleness section of the README](README.md#oracle-staleness).
+
 ### Oracle Tests
 
 Oracle-related contributions should consider:
