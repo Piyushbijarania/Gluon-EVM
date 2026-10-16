@@ -595,6 +595,12 @@ ledger retained each second: `1e18` means no decay, and `0` clears past volume w
 at least one second has elapsed. Passing `(0, 0, 1e18)` preserves the previous
 default behavior. Different reactors may choose different fixed settings.
 
+The reactor keeps gross Proton-to-Neutron and Neutron-to-Proton volumes in separate
+unsigned counters. Both decay with the configured retention multiplier. Fees use
+the positive difference for the relevant direction, so opposing trades offset each
+other only when calculating the fee. Each counter is rounded down separately during
+decay. Transmutation events report both unsigned counters.
+
 The factory is permissionless and has no owner. These constructor and factory
 interface changes apply to new deployments; existing deployed contracts are unchanged.
 
