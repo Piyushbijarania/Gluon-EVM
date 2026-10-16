@@ -251,12 +251,19 @@ contract UnsignedVolumeLedgerTest is Test {
         BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 1e16, 0);
         assertEq(target.fee(1, type(uint256).max), 1e16);
         assertEq(target.fee(type(uint256).max, 0), 1e16);
-        assertEq(target.fee(0, type(uint256).max), WAD);
+        assertEq(target.fee(0, type(uint256).max), 1e16);
+    }
+
+    function testZeroReserveReturnsBaseFeeWithNonzeroVolumeCoefficient() public {
+        BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 1e16, WAD);
+        assertEq(target.fee(0, 0), 1e16);
+        assertEq(target.fee(0, type(uint256).max), 1e16);
     }
 
     function testZeroBetaSettingsStillRecordSeparateVolumes() public {
         BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 0, 0);
         assertEq(target.fee(1, type(uint256).max), 0);
+        assertEq(target.fee(0, type(uint256).max), 0);
         reactor = _deploy(0, 0, WAD, 100e18);
         vm.startPrank(user);
         (, uint256 plusFee) = reactor.transmuteProtonToNeutron(WAD, user);
@@ -270,7 +277,7 @@ contract UnsignedVolumeLedgerTest is Test {
 
     function testFeeCapsWithoutOverflowAtFullUnsignedVolume() public {
         BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 1, WAD);
-        assertEq(target.fee(0, type(uint256).max), WAD);
+        assertEq(target.fee(0, type(uint256).max), 1);
         assertEq(target.fee(1, type(uint256).max), WAD);
         assertEq(target.fee(type(uint256).max, type(uint256).max), WAD);
         assertEq(target.fee(type(uint256).max, 0), 1);

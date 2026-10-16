@@ -486,13 +486,10 @@ contract StableCoinReactor is ReentrancyGuard {
     }
 
     function _betaFeeWad(uint256 normalizedReserve, uint256 volume) internal view returns (uint256) {
-        if (normalizedReserve == 0) return WAD;
-        if (betaPhi1 == 0) return betaPhi0;
-        // betaPhi1 is at least 1, so this ratio already implies a capped fee.
-        // Check it before mulDiv to avoid overflowing an uncapped intermediate.
+        if (normalizedReserve == 0 || betaPhi1 == 0) return betaPhi0;
+        // Cap extreme ratios before mulDiv, which may overflow before Math.min can apply.
         if (volume / normalizedReserve >= WAD) return WAD;
-        uint256 term = Math.mulDiv(betaPhi1, volume, normalizedReserve);
-        return Math.min(betaPhi0 + term, WAD);
+        return Math.min(betaPhi0 + Math.mulDiv(betaPhi1, volume, normalizedReserve), WAD);
     }
 
     function transmuteProtonToNeutron(uint256 protonIn, address to)
