@@ -287,6 +287,41 @@ contract UnsignedVolumeLedgerTest is Test {
         assertEq(minimum.fee(1, WAD - 1), WAD);
     }
 
+    function testFeeAtEqualVolumeAndReserveUsesBothCoefficients() public {
+        BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 1e16, 2e16);
+        assertEq(target.fee(7 * WAD, 7 * WAD), 3e16);
+    }
+
+    function testFeeAtWadVolumeRatioIsCapped() public {
+        BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 0, 1);
+        assertEq(target.fee(7, 7 * WAD - 1), WAD - 1);
+        assertEq(target.fee(7, 7 * WAD), WAD);
+        assertEq(target.fee(7, 7 * WAD + 1), WAD);
+        assertEq(target.fee(7, type(uint256).max), WAD);
+    }
+
+    function testLargeReservePreservesUncappedFee() public {
+        BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), 1e16, 2e16);
+        assertEq(target.fee(type(uint256).max, type(uint256).max), 3e16);
+    }
+
+    function testFuzzFeeMatchesFullWidthReference(uint256 volume, uint256 reserveWad, uint64 phi0Raw, uint64 phi1Raw)
+        public
+    {
+        uint256 phi0 = bound(phi0Raw, 0, WAD);
+        uint256 phi1 = bound(phi1Raw, 0, WAD);
+        BetaFeeHarness target = new BetaFeeHarness(address(base), address(oracle), phi0, phi1);
+        uint256 expected = phi0;
+        if (reserveWad != 0) {
+            // Compare full-width products to detect the fee cap before division.
+            (uint256 feeHigh, uint256 feeLow) = Math.mul512(phi1, volume);
+            (uint256 capHigh, uint256 capLow) = Math.mul512(WAD - phi0, reserveWad);
+            bool capped = feeHigh > capHigh || (feeHigh == capHigh && feeLow >= capLow);
+            expected = capped ? WAD : phi0 + Math.mulDiv(phi1, volume, reserveWad);
+        }
+        assertEq(target.fee(reserveWad, volume), expected);
+    }
+
     function testFuzzFeeMatchesBoundedReference(uint128 volume, uint128 reserveRaw, uint64 phi0Raw, uint64 phi1Raw)
         public
     {
