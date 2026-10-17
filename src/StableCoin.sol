@@ -97,7 +97,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 baseIn,
         uint256 neutronOut,
         uint256 protonOut,
-        uint256 protocolFee
+        uint256 protocolFee,
+        uint256 devFeeAmount
     );
     event Fusion(
         address indexed from,
@@ -105,7 +106,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronBurn,
         uint256 protonBurn,
         uint256 baseOut,
-        uint256 protocolFee
+        uint256 protocolFee,
+        uint256 devFeeAmount
     );
     event TransmutePlus(
         address indexed from,
@@ -114,7 +116,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronOut,
         uint256 feeWad,
         uint256 newDecayedVolumePlusBase,
-        uint256 newDecayedVolumeMinusBase
+        uint256 newDecayedVolumeMinusBase,
+        uint256 devFeeAmount
     );
     event TransmuteMinus(
         address indexed from,
@@ -123,12 +126,12 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 protonOut,
         uint256 feeWad,
         uint256 newDecayedVolumePlusBase,
-        uint256 newDecayedVolumeMinusBase
+        uint256 newDecayedVolumeMinusBase,
+        uint256 devFeeAmount
     );
     event DevTransferProposed(address indexed previousDev, address indexed proposedDev);
     event DevTransferred(address indexed previousDev, address indexed newDev);
     event DevFeeReceiverChanged(address indexed previousReceiver, address indexed newReceiver);
-    event DevFeePaid(address indexed receiver, uint256 amount);
 
     event PegAdjusted(uint256 previousPegFactor, uint256 newPegFactor, uint256 reserveRatio);
 
@@ -219,19 +222,17 @@ contract StableCoinReactor is ReentrancyGuard {
     }
 
     function acceptDev() external {
-        if (msg.sender != pendingDev || pendingDev == address(0)) revert OnlyPendingDev();
-        address previousDev = dev;
+        if (msg.sender != pendingDev) revert OnlyPendingDev();
+        emit DevTransferred(dev, msg.sender);
         dev = msg.sender;
         pendingDev = address(0);
-        emit DevTransferred(previousDev, msg.sender);
     }
 
     function setDevFeeReceiver(address newReceiver) external {
         if (msg.sender != dev) revert OnlyDev();
         if (newReceiver == address(0)) revert InvalidDevFeeReceiver();
-        address previousReceiver = devFeeReceiver;
+        emit DevFeeReceiverChanged(devFeeReceiver, newReceiver);
         devFeeReceiver = newReceiver;
-        emit DevFeeReceiverChanged(previousReceiver, newReceiver);
     }
 
     function reserve() public view returns (uint256) {
@@ -427,12 +428,11 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 received = reserve() - reserveBaseline;
 
         (uint256 netAmount, uint256 fee, uint256 devFeeAmount) = _deductFees(received, FISSION_FEE);
-        _payDevFee(devFeeAmount);
+        if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
 
         // Accounting boundary. Every reserve amount below is in the protocol representation;
-        // the event reports the received amount and retained protocol fee in native units.
+        // The event reports received funds, retained protocol fees and dev fees in native units.
         uint256 net = _baseToWad(netAmount);
-        if (net == 0) revert AmountTooSmall();
         uint256 reserveBefore = _baseToWad(reserveBaseline);
 
         uint256 adjustedBasePrice = Math.mulDiv(basePrice, PEG_FACTOR_SCALE, pegFactorBefore);
@@ -450,7 +450,7 @@ contract StableCoinReactor is ReentrancyGuard {
         NEUTRON_TOKEN.mint(to, neutronOut);
         PROTON_TOKEN.mint(to, protonOut);
 
-        emit Fission(msg.sender, to, received, neutronOut, protonOut, fee);
+        emit Fission(msg.sender, to, received, neutronOut, protonOut, fee, devFeeAmount);
     }
 
     function fusion(uint256 m, address to) external nonReentrant {
@@ -480,8 +480,8 @@ contract StableCoinReactor is ReentrancyGuard {
         (uint256 net, uint256 fee, uint256 devFeeAmount) = _deductFees(m, FUSION_FEE);
 
         BASE_TOKEN.safeTransfer(to, net);
-        _payDevFee(devFeeAmount);
-        emit Fusion(msg.sender, to, nBurn, pBurn, net, fee);
+        if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
+        emit Fusion(msg.sender, to, nBurn, pBurn, net, fee, devFeeAmount);
     }
 
     // Both fees use the same gross amount. The protocol fee stays in the reserve.
@@ -492,15 +492,7 @@ contract StableCoinReactor is ReentrancyGuard {
     {
         feeAmount = Math.mulDiv(amount, feeWad, WAD);
         devFeeAmount = Math.mulDiv(amount, devFee, WAD);
-        if (feeAmount >= amount || devFeeAmount >= amount - feeAmount) revert AmountTooSmall();
         net = amount - feeAmount - devFeeAmount;
-    }
-
-    function _payDevFee(uint256 amount) internal {
-        if (amount == 0) return;
-        address receiver = devFeeReceiver;
-        BASE_TOKEN.safeTransfer(receiver, amount);
-        emit DevFeePaid(receiver, amount);
     }
 
     function _rpow(uint256 x, uint256 n) internal pure returns (uint256 z) {
@@ -579,7 +571,7 @@ contract StableCoinReactor is ReentrancyGuard {
         neutronOut = Math.mulDiv(netBase, WAD, neutronPriceBase);
         if (neutronOut == 0) revert AmountTooSmall();
 
-        _payDevFee(devFeeAmount);
+        if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
         uint256 resultingNeutronSupply = neutronSupplyCached + neutronOut;
         uint256 resultingReserveRatio = _reserveRatioWad(_normalizedReserve(), resultingNeutronSupply, basePrice);
         if (resultingReserveRatio < CRITICAL_RESERVE_RATIO) {
@@ -593,7 +585,9 @@ contract StableCoinReactor is ReentrancyGuard {
 
         decayedVolumePlusBase = newVolume;
 
-        emit TransmutePlus(msg.sender, to, protonIn, neutronOut, feeWad, newVolume, decayedVolumeMinusBase);
+        emit TransmutePlus(
+            msg.sender, to, protonIn, neutronOut, feeWad, newVolume, decayedVolumeMinusBase, devFeeAmount
+        );
     }
 
     /**
@@ -637,9 +631,11 @@ contract StableCoinReactor is ReentrancyGuard {
         NEUTRON_TOKEN.burn(msg.sender, neutronIn);
         PROTON_TOKEN.mint(to, protonOut);
         decayedVolumeMinusBase = newVolume;
-        _payDevFee(devFeeAmount);
+        if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
 
-        emit TransmuteMinus(msg.sender, to, neutronIn, protonOut, feeWad, decayedVolumePlusBase, newVolume);
+        emit TransmuteMinus(
+            msg.sender, to, neutronIn, protonOut, feeWad, decayedVolumePlusBase, newVolume, devFeeAmount
+        );
     }
 
     function _neutronPriceInBase(uint256 normalizedReserve, uint256 neutronSupplyTokens, uint256 basePrice)

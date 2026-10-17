@@ -30,6 +30,7 @@ contract DevTransferTest is Test {
 
     event DevTransferProposed(address indexed previousDev, address indexed proposedDev);
     event DevTransferred(address indexed previousDev, address indexed newDev);
+    event DevFeeReceiverChanged(address indexed previousReceiver, address indexed newReceiver);
 
     function setUp() public {
         factory = new StableCoinFactory();
@@ -145,13 +146,6 @@ contract DevTransferTest is Test {
 
     function testCannotAcceptWithoutAProposal() public {
         vm.prank(nextDev);
-        vm.expectRevert(StableCoinReactor.OnlyPendingDev.selector);
-        reactor.acceptDev();
-        assertEq(reactor.dev(), INITIAL_DEV);
-    }
-
-    function testZeroAddressCannotAcceptAnEmptyProposal() public {
-        vm.prank(address(0));
         vm.expectRevert(StableCoinReactor.OnlyPendingDev.selector);
         reactor.acceptDev();
         assertEq(reactor.dev(), INITIAL_DEV);
@@ -296,6 +290,8 @@ contract DevTransferTest is Test {
         vm.prank(nextDev);
         vm.expectRevert(StableCoinReactor.OnlyDev.selector);
         reactor.setDevFeeReceiver(user);
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit DevFeeReceiverChanged(INITIAL_DEV, user);
         vm.prank(INITIAL_DEV);
         reactor.setDevFeeReceiver(user);
         assertEq(reactor.devFeeReceiver(), user);

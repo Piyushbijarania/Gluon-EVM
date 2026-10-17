@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm, stdError} from "forge-std/Test.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {StableCoinFactory} from "../src/StableCoinFactory.sol";
 import {StableCoinReactor} from "../src/StableCoin.sol";
@@ -14,6 +14,45 @@ contract DevFeeAccountingTest is Test {
     address private dev = makeAddr("dev authority");
     address private receiver = dev;
     address private user = makeAddr("fee user");
+
+    event Fission(
+        address indexed from,
+        address indexed to,
+        uint256 baseIn,
+        uint256 neutronOut,
+        uint256 protonOut,
+        uint256 protocolFee,
+        uint256 devFeeAmount
+    );
+    event Fusion(
+        address indexed from,
+        address indexed to,
+        uint256 neutronBurn,
+        uint256 protonBurn,
+        uint256 baseOut,
+        uint256 protocolFee,
+        uint256 devFeeAmount
+    );
+    event TransmutePlus(
+        address indexed from,
+        address indexed to,
+        uint256 protonIn,
+        uint256 neutronOut,
+        uint256 feeWad,
+        uint256 newDecayedVolumePlusBase,
+        uint256 newDecayedVolumeMinusBase,
+        uint256 devFeeAmount
+    );
+    event TransmuteMinus(
+        address indexed from,
+        address indexed to,
+        uint256 neutronIn,
+        uint256 protonOut,
+        uint256 feeWad,
+        uint256 newDecayedVolumePlusBase,
+        uint256 newDecayedVolumeMinusBase,
+        uint256 devFeeAmount
+    );
 
     function _deploy(uint8 decimals_, uint256 fissionFee, uint256 fusionFee, uint256 betaFee, uint256 devRate)
         private
@@ -77,7 +116,21 @@ contract DevFeeAccountingTest is Test {
         uint256 nSupply = reactor.NEUTRON_TOKEN().totalSupply();
         uint256 pSupply = reactor.PROTON_TOKEN().totalSupply();
         uint256 ratioBefore = reactor.reserveRatioPeggedAsset();
-        _fund(base, reactor, 20e18);
+        base.mint(user, 20e18);
+        vm.startPrank(user);
+        base.approve(address(reactor), 20e18);
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit Fission(
+            user,
+            user,
+            20e18,
+            Math.mulDiv(1958e16, WAD, ratioBefore),
+            Math.mulDiv(1958e16, pSupply, reserveBefore),
+            4e17,
+            2e16
+        );
+        reactor.fission(20e18, user);
+        vm.stopPrank();
         assertEq(reactor.reserve(), reserveBefore + 20e18 - 2e16);
         assertEq(base.balanceOf(receiver), receiverBefore + 2e16);
         assertEq(reactor.NEUTRON_TOKEN().balanceOf(user), Math.mulDiv(1958e16, WAD, ratioBefore));
@@ -88,6 +141,16 @@ contract DevFeeAccountingTest is Test {
         uint256 nBefore = reactor.NEUTRON_TOKEN().balanceOf(user);
         uint256 pBefore = reactor.PROTON_TOKEN().balanceOf(user);
         receiverBefore = base.balanceOf(receiver);
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit Fusion(
+            user,
+            user,
+            Math.mulDiv(10e18, nSupply, reserveBefore),
+            Math.mulDiv(10e18, pSupply, reserveBefore),
+            969e16,
+            3e17,
+            1e16
+        );
         vm.prank(user);
         reactor.fusion(10e18, user);
         assertEq(base.balanceOf(user), 969e16);
@@ -108,6 +171,8 @@ contract DevFeeAccountingTest is Test {
         uint256 expectedNet = gross - Math.mulDiv(gross, 1e16, WAD) - expectedDevFee;
         uint256 expectedOut = Math.mulDiv(expectedNet, WAD, reactor.neutronPriceInBase());
         uint256 nBefore = reactor.NEUTRON_TOKEN().balanceOf(user);
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit TransmutePlus(user, user, protonIn, expectedOut, 1e16, gross, 0, expectedDevFee);
         vm.prank(user);
         (uint256 neutronOut, uint256 fee) = reactor.transmuteProtonToNeutron(protonIn, user);
         assertEq(fee, 1e16);
@@ -117,10 +182,13 @@ contract DevFeeAccountingTest is Test {
         assertEq(base.balanceOf(receiver), receiverBefore + expectedDevFee);
         reserveBefore = reactor.reserve();
         receiverBefore = base.balanceOf(receiver);
+        uint256 plusVolume = gross;
         gross = reactor.neutronPriceInBase();
         expectedDevFee = Math.mulDiv(gross, DEV_FEE, WAD);
         expectedNet = gross - Math.mulDiv(gross, 1e16, WAD) - expectedDevFee;
         expectedOut = Math.mulDiv(expectedNet, WAD, reactor.protonPriceInBase());
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit TransmuteMinus(user, user, WAD, expectedOut, 1e16, plusVolume, gross, expectedDevFee);
         vm.prank(user);
         (uint256 protonOut, uint256 minusFee) = reactor.transmuteNeutronToProton(WAD, user);
         assertEq(minusFee, 1e16);
@@ -160,15 +228,42 @@ contract DevFeeAccountingTest is Test {
         uint256 expectedDevNative = Math.mulDiv(Math.mulDiv(gross, DEV_FEE, WAD), 1e6, WAD);
         uint256 r = reactor.reserve();
         uint256 before = base.balanceOf(receiver);
+        uint256 devWad = Math.mulDiv(gross, DEV_FEE, WAD);
+        uint256 expectedOut =
+            Math.mulDiv(gross - Math.mulDiv(gross, 1e16, WAD) - devWad, WAD, reactor.neutronPriceInBase());
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit TransmutePlus(user, user, 1e18, expectedOut, 1e16, gross, 0, expectedDevNative);
         vm.prank(user);
         reactor.transmuteProtonToNeutron(1e18, user);
         assertEq(reactor.reserve(), r - expectedDevNative);
         assertEq(base.balanceOf(receiver), before + expectedDevNative);
     }
 
+    function testBetaEventReportsZeroWhenNativeDevPaymentRoundsToZero() public {
+        (MockDecimalERC20 base, StableCoinReactor reactor) = _deploy(0, 0, 0, 0, DEV_FEE);
+        _fund(base, reactor, 100);
+        uint256 r = reactor.reserve();
+        uint256 receiverBefore = base.balanceOf(receiver);
+        uint256 gross = reactor.neutronPriceInBase();
+        assertGt(Math.mulDiv(gross, DEV_FEE, WAD), 0);
+        assertEq(Math.mulDiv(Math.mulDiv(gross, DEV_FEE, WAD), 1, WAD), 0);
+        uint256 expectedOut = Math.mulDiv(gross - Math.mulDiv(gross, DEV_FEE, WAD), WAD, reactor.protonPriceInBase());
+        vm.recordLogs();
+        vm.expectEmit(true, true, false, true, address(reactor));
+        emit TransmuteMinus(user, user, WAD, expectedOut, 0, 0, gross, 0);
+        vm.prank(user);
+        reactor.transmuteNeutronToProton(WAD, user);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            assertTrue(logs[i].emitter != address(base), "zero dev payment must not transfer base tokens");
+        }
+        assertEq(reactor.reserve(), r);
+        assertEq(base.balanceOf(receiver), receiverBefore);
+    }
+
     function testFuzzFissionBalanceConservationAcrossDecimals(uint8 decimals_, uint96 input) public {
         decimals_ = uint8(bound(decimals_, 0, 18));
-        uint256 amount = bound(input, 1, 1e24);
+        uint256 amount = bound(input, 2, 1e24);
         (MockDecimalERC20 base, StableCoinReactor reactor) = _deploy(decimals_, 2e16, 3e16, 0, DEV_FEE);
         uint256 r = reactor.reserve();
         uint256 d = base.balanceOf(receiver);
@@ -179,14 +274,34 @@ contract DevFeeAccountingTest is Test {
         assertEq(base.balanceOf(user), 0);
     }
 
+    function testOneUnitDepositRevertsWithoutStateChange() public {
+        (MockDecimalERC20 base, StableCoinReactor reactor) = _deploy(18, 2e16, 3e16, 0, DEV_FEE);
+        uint256 r = reactor.reserve();
+        uint256 d = base.balanceOf(receiver);
+        base.mint(user, 1);
+        vm.startPrank(user);
+        base.approve(address(reactor), 1);
+        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
+        reactor.fission(1, user);
+        vm.stopPrank();
+        assertEq(base.balanceOf(user), 1);
+        assertEq(base.balanceOf(receiver), d);
+        assertEq(reactor.reserve(), r);
+        assertEq(reactor.NEUTRON_TOKEN().balanceOf(user), 0);
+        assertEq(reactor.PROTON_TOKEN().balanceOf(user), 0);
+    }
+
     function testFullBetaFeeWithDevFeeRevertsWithoutPaying() public {
         (MockDecimalERC20 base, StableCoinReactor reactor) = _deploy(18, 0, 0, WAD, DEV_FEE);
         _fund(base, reactor, 100e18);
         uint256 r = reactor.reserve();
         uint256 d = base.balanceOf(receiver);
         vm.prank(user);
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
+        vm.expectRevert(stdError.arithmeticError);
         reactor.transmuteNeutronToProton(1e18, user);
+        vm.prank(user);
+        vm.expectRevert(stdError.arithmeticError);
+        reactor.transmuteProtonToNeutron(1e18, user);
         assertEq(reactor.reserve(), r);
         assertEq(base.balanceOf(receiver), d);
     }

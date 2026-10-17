@@ -22,9 +22,10 @@ contract BetaFeeHarness is StableCoinReactor {
 contract UnsignedVolumeLedgerTest is Test {
     uint256 private constant WAD = 1e18;
     uint256 private constant FIRST_TRADE = 38 * 1e75;
-    bytes32 private constant PLUS = keccak256("TransmutePlus(address,address,uint256,uint256,uint256,uint256,uint256)");
+    bytes32 private constant PLUS =
+        keccak256("TransmutePlus(address,address,uint256,uint256,uint256,uint256,uint256,uint256)");
     bytes32 private constant MINUS =
-        keccak256("TransmuteMinus(address,address,uint256,uint256,uint256,uint256,uint256)");
+        keccak256("TransmuteMinus(address,address,uint256,uint256,uint256,uint256,uint256,uint256)");
     StableCoinFactory private factory;
     GenericMockERC20 private base;
     GenericMockOracle private oracle;
@@ -84,7 +85,7 @@ contract UnsignedVolumeLedgerTest is Test {
                 entries[i].emitter == address(reactor) && entries[i].topics.length > 0
                     && entries[i].topics[0] == signature
             ) {
-                (,,, plus, minus) = abi.decode(entries[i].data, (uint256, uint256, uint256, uint256, uint256));
+                (,,, plus, minus,) = abi.decode(entries[i].data, (uint256, uint256, uint256, uint256, uint256, uint256));
                 found = true;
             }
         }

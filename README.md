@@ -607,8 +607,9 @@ For Gluon deployments, pass the initial dev address
 Only `dev` can call `setDevFeeReceiver(newReceiver)`, which rejects zero addresses.
 To transfer the dev role, the current dev calls `proposeDev(newDev)` and the nominee
 calls `acceptDev()`. A pending proposal can be replaced; acceptance clears it.
-Transferring dev does not change the fee receiver. Receiver changes, role transfers
-and dev payments emit events. Neither role can change the immutable fee rates,
+Transferring dev does not change the fee receiver. Receiver changes and role transfers
+emit events. Each operation event includes its dev fee amount in native reserve-token
+units. Neither role can change the immutable fee rates,
 beta parameters or oracle.
 
 ### Immutable Beta Parameters

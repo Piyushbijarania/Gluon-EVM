@@ -98,7 +98,8 @@ contract GluonIntegrationTest is Test {
         uint256 baseIn,
         uint256 neutronOut,
         uint256 protonOut,
-        uint256 protocolFee
+        uint256 protocolFee,
+        uint256 devFeeAmount
     );
 
     event ReactorDeployed(
@@ -1251,7 +1252,7 @@ contract GluonIntegrationTest is Test {
         feeToken.approve(address(feeReactor), amountIn);
 
         vm.expectEmit(true, true, false, true, address(feeReactor));
-        emit Fission(user, user, received, expectedNeutronOut, expectedProtonOut, expectedFee);
+        emit Fission(user, user, received, expectedNeutronOut, expectedProtonOut, expectedFee, 0);
 
         feeReactor.fission(amountIn, user);
         vm.stopPrank();
