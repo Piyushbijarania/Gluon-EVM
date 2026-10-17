@@ -10,7 +10,7 @@ import {GenericMockERC20, GenericMockOracle} from "./GenericIOracleIntegration.t
 contract BetaFeeHarness is StableCoinReactor {
     constructor(address base, address oracle, uint256 phi0, uint256 phi1)
         StableCoinReactor(
-            "Fee", "Base", "B", "Peg", "N", base, oracle, "Proton", "P", address(1), 0, 0, 1e18, phi0, phi1, 1e18
+            "Fee", "Base", "B", "Peg", "N", base, oracle, "Proton", "P", address(1), 0, 0, 0, 1e18, phi0, phi1, 1e18
         )
     {}
 
@@ -56,6 +56,7 @@ contract UnsignedVolumeLedgerTest is Test {
                 "Proton",
                 "P",
                 address(1),
+                0,
                 0,
                 0,
                 WAD,

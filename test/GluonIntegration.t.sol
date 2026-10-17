@@ -87,7 +87,7 @@ contract GluonIntegrationTest is Test {
     ChainlinkToOracleAdapter adapter;
     MockFeed mockFeed;
     MockERC20 baseToken;
-    address treasury = makeAddr("treasury");
+    address dev = makeAddr("dev");
     uint256 internal constant INITIAL_RESERVE = 100e18;
 
     event PegAdjusted(uint256 previousPegFactor, uint256 newPegFactor, uint256 reserveRatio);
@@ -98,13 +98,13 @@ contract GluonIntegrationTest is Test {
         uint256 baseIn,
         uint256 neutronOut,
         uint256 protonOut,
-        uint256 feeToTreasury
+        uint256 protocolFee
     );
 
     event ReactorDeployed(
         address indexed reactor,
         address indexed base,
-        address indexed treasury,
+        address indexed dev,
         string vaultName,
         string baseAssetName,
         string baseAssetSymbol,
@@ -116,7 +116,9 @@ contract GluonIntegrationTest is Test {
         uint256 fissionFee,
         uint256 fusionFee,
         uint256 criticalReserveRatioWad,
-        uint256 initialReserve
+        uint256 initialReserve,
+        address initialDev,
+        uint256 devFee
     );
 
     function setUp() public {
@@ -165,7 +167,8 @@ contract GluonIntegrationTest is Test {
             oracleAddress,
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             criticalReserveRatio,
@@ -205,7 +208,8 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -238,7 +242,8 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             fissionFee,
             0,
             15e17,
@@ -569,7 +574,7 @@ contract GluonIntegrationTest is Test {
         eighteenDecimalToken.mint(user18, 25e18);
 
         uint256 sixDecimalReserveBefore = sixDecimalReactor.reserve();
-        uint256 sixDecimalTreasuryBefore = sixDecimalToken.balanceOf(treasury);
+        uint256 sixDecimalDevBefore = sixDecimalToken.balanceOf(dev);
 
         vm.startPrank(user6);
         sixDecimalToken.approve(address(sixDecimalReactor), 25e6);
@@ -582,8 +587,8 @@ contract GluonIntegrationTest is Test {
         vm.stopPrank();
 
         // The fee is taken in native units before the deposit is normalized.
-        assertEq(sixDecimalToken.balanceOf(treasury), sixDecimalTreasuryBefore + 25e5, "wrong native six-decimal fee");
-        assertEq(sixDecimalReactor.reserve(), sixDecimalReserveBefore + 225e5, "wrong native six-decimal reserve");
+        assertEq(sixDecimalToken.balanceOf(dev), sixDecimalDevBefore, "wrong native six-decimal fee");
+        assertEq(sixDecimalReactor.reserve(), sixDecimalReserveBefore + 25e6, "wrong native six-decimal reserve");
 
         // The post-fee amount must normalize identically across decimals.
         assertEq(
@@ -694,7 +699,8 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -861,7 +867,8 @@ contract GluonIntegrationTest is Test {
             address(zeroAdapter),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -901,7 +908,8 @@ contract GluonIntegrationTest is Test {
             address(0),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -945,7 +953,8 @@ contract GluonIntegrationTest is Test {
             eoaOracle,
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -976,7 +985,7 @@ contract GluonIntegrationTest is Test {
         baseToken.mint(address(this), requestedReserve);
         baseToken.approve(address(factory), requestedReserve);
 
-        uint256 treasuryBefore = baseToken.balanceOf(treasury);
+        uint256 devBefore = baseToken.balanceOf(dev);
 
         StableCoinReactor prefundedFeeReactor = StableCoinReactor(
             factory.deployReactor(
@@ -989,7 +998,8 @@ contract GluonIntegrationTest is Test {
                 address(adapter),
                 "Gluon Gov",
                 "GOV",
-                treasury,
+                dev,
+                0,
                 fissionFee,
                 0,
                 15e17,
@@ -1002,9 +1012,9 @@ contract GluonIntegrationTest is Test {
 
         assertEq(address(prefundedFeeReactor), predictedReactor, "unexpected reactor address");
 
-        assertEq(baseToken.balanceOf(treasury), treasuryBefore + expectedFee, "wrong initial fission fee");
+        assertEq(baseToken.balanceOf(dev), devBefore, "wrong initial fission fee");
 
-        assertEq(prefundedFeeReactor.reserve(), expectedReserve, "wrong reserve after prefunding and fee");
+        assertEq(prefundedFeeReactor.reserve(), totalSeed, "wrong reserve after prefunding and fee");
 
         assertEq(prefundedFeeReactor.NEUTRON_TOKEN().totalSupply(), expectedNeutronSeed, "wrong neutron seed");
 
@@ -1024,8 +1034,8 @@ contract GluonIntegrationTest is Test {
 
         assertEq(
             prefundedFeeReactor.reserveRatioPeggedAsset(),
-            15e17,
-            "prefunded fee initialization should preserve target ratio"
+            Math.mulDiv(totalSeed, 1e18, expectedNeutronSeed),
+            "retained fees must increase the initial reserve ratio"
         );
     }
 
@@ -1106,7 +1116,8 @@ contract GluonIntegrationTest is Test {
             address(roundedAdapter),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -1162,7 +1173,9 @@ contract GluonIntegrationTest is Test {
             0,
             0,
             15e17,
-            receivedReserve
+            receivedReserve,
+            dev,
+            0
         );
 
         address reactorAddress = factory.deployReactor(
@@ -1175,7 +1188,8 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            treasury,
+            dev,
+            0,
             0,
             0,
             15e17,
@@ -1206,7 +1220,8 @@ contract GluonIntegrationTest is Test {
                 address(adapter),
                 "Gluon Gov",
                 "GOV",
-                treasury,
+                dev,
+                0,
                 1e17,
                 0,
                 15e17,
@@ -1218,7 +1233,7 @@ contract GluonIntegrationTest is Test {
         );
 
         uint256 reserveBefore = feeReactor.reserve();
-        uint256 neutronSupplyBefore = feeReactor.NEUTRON_TOKEN().totalSupply();
+        uint256 ratioBefore = feeReactor.reserveRatioPeggedAsset();
         uint256 protonSupplyBefore = feeReactor.PROTON_TOKEN().totalSupply();
 
         address user = makeAddr("feeTokenFissionUser");
@@ -1227,7 +1242,7 @@ contract GluonIntegrationTest is Test {
         uint256 expectedFee = 9e18;
         uint256 net = received - expectedFee;
 
-        uint256 expectedNeutronOut = net * neutronSupplyBefore / reserveBefore;
+        uint256 expectedNeutronOut = Math.mulDiv(net, 1e18, ratioBefore);
         uint256 expectedProtonOut = net * protonSupplyBefore / reserveBefore;
 
         feeToken.mint(user, amountIn);
@@ -1241,7 +1256,7 @@ contract GluonIntegrationTest is Test {
         feeReactor.fission(amountIn, user);
         vm.stopPrank();
 
-        assertEq(feeReactor.reserve(), reserveBefore + net, "wrong reserve increase");
+        assertEq(feeReactor.reserve(), reserveBefore + received, "wrong reserve increase");
         assertEq(feeReactor.NEUTRON_TOKEN().balanceOf(user), expectedNeutronOut, "wrong neutron output");
         assertEq(feeReactor.PROTON_TOKEN().balanceOf(user), expectedProtonOut, "wrong proton output");
     }
@@ -1249,7 +1264,7 @@ contract GluonIntegrationTest is Test {
     function testInitialFissionUsesConfiguredFissionFee() public {
         _prepareInitialReserve();
 
-        uint256 treasuryBefore = baseToken.balanceOf(treasury);
+        uint256 devBefore = baseToken.balanceOf(dev);
 
         StableCoinReactor feeReactor = StableCoinReactor(
             factory.deployReactor(
@@ -1262,7 +1277,8 @@ contract GluonIntegrationTest is Test {
                 address(adapter),
                 "Gluon Gov",
                 "GOV",
-                treasury,
+                dev,
+                0,
                 1e17,
                 0,
                 15e17,
@@ -1276,9 +1292,14 @@ contract GluonIntegrationTest is Test {
         uint256 expectedFee = 10e18;
         uint256 expectedReserve = INITIAL_RESERVE - expectedFee;
 
-        assertEq(baseToken.balanceOf(treasury), treasuryBefore + expectedFee, "wrong initial fission fee");
-        assertEq(feeReactor.reserve(), expectedReserve, "wrong reserve after initial fission fee");
-        assertEq(feeReactor.reserveRatioPeggedAsset(), 15e17, "initial ratio changed after fee");
+        assertEq(baseToken.balanceOf(dev), devBefore, "wrong initial fission fee");
+        assertEq(feeReactor.reserve(), INITIAL_RESERVE, "wrong reserve after initial fission fee");
+        assertEq(
+            feeReactor.reserveRatioPeggedAsset(),
+            Math.mulDiv(INITIAL_RESERVE, 1e18, feeReactor.NEUTRON_TOKEN().totalSupply()),
+            "retained fee must increase the ratio"
+        );
+        assertEq(feeReactor.NEUTRON_TOKEN().totalSupply(), Math.mulDiv(expectedReserve, 1e18, 15e17));
     }
 
     function testFissionAfterPegFactorAdjustmentKeepsProportionalAccounting() public {

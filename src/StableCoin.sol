@@ -27,7 +27,11 @@ contract StableCoinReactor is ReentrancyGuard {
     error InvalidBaseTokenDecimals(uint8 decimals);
     error InvalidOracle();
     error OracleNotContract();
-    error InvalidTreasury();
+    error InvalidDev();
+    error InvalidDevFeeReceiver();
+    error InvalidDevFee();
+    error OnlyDev();
+    error OnlyPendingDev();
     error InvalidFissionFee();
     error InvalidFusionFee();
     error InvalidCriticalReserveRatio();
@@ -69,7 +73,10 @@ contract StableCoinReactor is ReentrancyGuard {
     uint256 public lastSuccessfulBasePrice;
 
     address public immutable FACTORY;
-    address public immutable TREASURY;
+    address public dev;
+    address public pendingDev;
+    address public devFeeReceiver;
+    uint256 public immutable devFee;
     uint256 public immutable FISSION_FEE;
     uint256 public immutable FUSION_FEE;
     uint256 public immutable CRITICAL_RESERVE_RATIO;
@@ -90,7 +97,7 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 baseIn,
         uint256 neutronOut,
         uint256 protonOut,
-        uint256 feeToTreasury
+        uint256 protocolFee
     );
     event Fusion(
         address indexed from,
@@ -98,7 +105,7 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronBurn,
         uint256 protonBurn,
         uint256 baseOut,
-        uint256 feeToTreasury
+        uint256 protocolFee
     );
     event TransmutePlus(
         address indexed from,
@@ -118,6 +125,11 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 newDecayedVolumePlusBase,
         uint256 newDecayedVolumeMinusBase
     );
+    event DevTransferProposed(address indexed previousDev, address indexed proposedDev);
+    event DevTransferred(address indexed previousDev, address indexed newDev);
+    event DevFeeReceiverChanged(address indexed previousReceiver, address indexed newReceiver);
+    event DevFeePaid(address indexed receiver, uint256 amount);
+
     event PegAdjusted(uint256 previousPegFactor, uint256 newPegFactor, uint256 reserveRatio);
 
     constructor(
@@ -130,7 +142,8 @@ contract StableCoinReactor is ReentrancyGuard {
         address oracleParam, // Replaced specific Pyth params with generic Oracle address
         string memory protonNameParam,
         string memory protonSymbolParam,
-        address treasuryParam,
+        address devParam,
+        uint256 devFeeParam,
         uint256 fissionFeeParam,
         uint256 fusionFeeParam,
         uint256 criticalReserveRatioWadParam,
@@ -154,9 +167,10 @@ contract StableCoinReactor is ReentrancyGuard {
 
         if (oracleParam == address(0)) revert InvalidOracle();
         if (oracleParam.code.length == 0) revert OracleNotContract();
-        if (treasuryParam == address(0)) revert InvalidTreasury();
-        if (fissionFeeParam >= WAD) revert InvalidFissionFee();
-        if (fusionFeeParam >= WAD) revert InvalidFusionFee();
+        if (devParam == address(0)) revert InvalidDev();
+        if (devFeeParam >= WAD) revert InvalidDevFee();
+        if (fissionFeeParam >= WAD - devFeeParam) revert InvalidFissionFee();
+        if (fusionFeeParam >= WAD - devFeeParam) revert InvalidFusionFee();
         if (betaPhi0Param > WAD || betaPhi1Param > WAD) revert InvalidPhi();
         if (decayPerSecondWadParam > WAD) revert InvalidDecay();
         if (criticalReserveRatioWadParam < WAD || criticalReserveRatioWadParam >= UPPER_RESERVE_RATIO) {
@@ -185,7 +199,9 @@ contract StableCoinReactor is ReentrancyGuard {
         NEUTRON_TOKEN = new Tokeon(peggedAssetNameParam, peggedAssetSymbolParam, address(this));
         PROTON_TOKEN = new Tokeon(protonNameParam, protonSymbolParam, address(this));
 
-        TREASURY = treasuryParam;
+        dev = devParam;
+        devFeeReceiver = devParam;
+        devFee = devFeeParam;
         FISSION_FEE = fissionFeeParam;
         FUSION_FEE = fusionFeeParam;
 
@@ -193,6 +209,29 @@ contract StableCoinReactor is ReentrancyGuard {
         betaPhi1 = betaPhi1Param;
         decayPerSecondWad = decayPerSecondWadParam;
         lastDecayTs = block.timestamp;
+    }
+
+    function proposeDev(address newDev) external {
+        if (msg.sender != dev) revert OnlyDev();
+        if (newDev == address(0)) revert InvalidDev();
+        pendingDev = newDev;
+        emit DevTransferProposed(dev, newDev);
+    }
+
+    function acceptDev() external {
+        if (msg.sender != pendingDev || pendingDev == address(0)) revert OnlyPendingDev();
+        address previousDev = dev;
+        dev = msg.sender;
+        pendingDev = address(0);
+        emit DevTransferred(previousDev, msg.sender);
+    }
+
+    function setDevFeeReceiver(address newReceiver) external {
+        if (msg.sender != dev) revert OnlyDev();
+        if (newReceiver == address(0)) revert InvalidDevFeeReceiver();
+        address previousReceiver = devFeeReceiver;
+        devFeeReceiver = newReceiver;
+        emit DevFeeReceiverChanged(previousReceiver, newReceiver);
     }
 
     function reserve() public view returns (uint256) {
@@ -383,16 +422,16 @@ contract StableCoinReactor is ReentrancyGuard {
         }
 
         // ERC-20 boundary. reserveBaseline, received and fee are in the token's native units:
-        // the deposit is measured against a live balance and the fee leaves as a transfer.
+        // the deposit is measured against a live balance; only the separate dev fee is transferred.
         BASE_TOKEN.safeTransferFrom(msg.sender, address(this), amountIn);
         uint256 received = reserve() - reserveBaseline;
 
-        uint256 fee = Math.mulDiv(received, FISSION_FEE, WAD);
-        if (fee > 0) BASE_TOKEN.safeTransfer(TREASURY, fee);
+        (uint256 netAmount, uint256 fee, uint256 devFeeAmount) = _deductFees(received, FISSION_FEE);
+        _payDevFee(devFeeAmount);
 
         // Accounting boundary. Every reserve amount below is in the protocol representation;
-        // received and fee are only touched again by the event, which reports native amounts.
-        uint256 net = _baseToWad(received - fee);
+        // the event reports the received amount and retained protocol fee in native units.
+        uint256 net = _baseToWad(netAmount);
         if (net == 0) revert AmountTooSmall();
         uint256 reserveBefore = _baseToWad(reserveBaseline);
 
@@ -417,7 +456,7 @@ contract StableCoinReactor is ReentrancyGuard {
     function fusion(uint256 m, address to) external nonReentrant {
         if (m == 0) revert AmountZero();
         // Entry boundary: the reserve and the requested amount are converted once, here.
-        // The payout and fee below leave in the token's native units.
+        // The payout and dev fee leave in native units; the fusion fee stays in the reserve.
         uint256 normalizedReserve = _normalizedReserve();
         if (normalizedReserve == 0) revert EmptyReserve();
 
@@ -438,12 +477,30 @@ contract StableCoinReactor is ReentrancyGuard {
         NEUTRON_TOKEN.burn(msg.sender, nBurn);
         PROTON_TOKEN.burn(msg.sender, pBurn);
 
-        uint256 fee = Math.mulDiv(m, FUSION_FEE, WAD);
-        uint256 net = m - fee;
+        (uint256 net, uint256 fee, uint256 devFeeAmount) = _deductFees(m, FUSION_FEE);
 
         BASE_TOKEN.safeTransfer(to, net);
-        if (fee > 0) BASE_TOKEN.safeTransfer(TREASURY, fee);
+        _payDevFee(devFeeAmount);
         emit Fusion(msg.sender, to, nBurn, pBurn, net, fee);
+    }
+
+    // Both fees use the same gross amount. The protocol fee stays in the reserve.
+    function _deductFees(uint256 amount, uint256 feeWad)
+        internal
+        view
+        returns (uint256 net, uint256 feeAmount, uint256 devFeeAmount)
+    {
+        feeAmount = Math.mulDiv(amount, feeWad, WAD);
+        devFeeAmount = Math.mulDiv(amount, devFee, WAD);
+        if (feeAmount >= amount || devFeeAmount >= amount - feeAmount) revert AmountTooSmall();
+        net = amount - feeAmount - devFeeAmount;
+    }
+
+    function _payDevFee(uint256 amount) internal {
+        if (amount == 0) return;
+        address receiver = devFeeReceiver;
+        BASE_TOKEN.safeTransfer(receiver, amount);
+        emit DevFeePaid(receiver, amount);
     }
 
     function _rpow(uint256 x, uint256 n) internal pure returns (uint256 z) {
@@ -516,13 +573,15 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 grossBase = Math.mulDiv(protonIn, protonPriceBase, WAD);
         _decayLedger();
         feeWad = _betaPlusFeeWad(normalizedReserve);
-        uint256 netBase = Math.mulDiv(grossBase, (WAD - feeWad), WAD);
+        (uint256 netBase,, uint256 devFeeBaseWad) = _deductFees(grossBase, feeWad);
+        uint256 devFeeAmount = Math.mulDiv(devFeeBaseWad, BASE_TOKEN_UNIT, WAD);
 
         neutronOut = Math.mulDiv(netBase, WAD, neutronPriceBase);
         if (neutronOut == 0) revert AmountTooSmall();
 
+        _payDevFee(devFeeAmount);
         uint256 resultingNeutronSupply = neutronSupplyCached + neutronOut;
-        uint256 resultingReserveRatio = _reserveRatioWad(normalizedReserve, resultingNeutronSupply, basePrice);
+        uint256 resultingReserveRatio = _reserveRatioWad(_normalizedReserve(), resultingNeutronSupply, basePrice);
         if (resultingReserveRatio < CRITICAL_RESERVE_RATIO) {
             revert ResultingReserveRatioBelowCritical();
         }
@@ -567,7 +626,8 @@ contract StableCoinReactor is ReentrancyGuard {
 
         _decayLedger();
         feeWad = _betaMinusFeeWad(normalizedReserve);
-        uint256 netBase = Math.mulDiv(grossBase, (WAD - feeWad), WAD);
+        (uint256 netBase,, uint256 devFeeBaseWad) = _deductFees(grossBase, feeWad);
+        uint256 devFeeAmount = Math.mulDiv(devFeeBaseWad, BASE_TOKEN_UNIT, WAD);
 
         protonOut = Math.mulDiv(netBase, WAD, protonPriceBase);
         if (protonOut == 0) revert AmountTooSmall();
@@ -577,6 +637,7 @@ contract StableCoinReactor is ReentrancyGuard {
         NEUTRON_TOKEN.burn(msg.sender, neutronIn);
         PROTON_TOKEN.mint(to, protonOut);
         decayedVolumeMinusBase = newVolume;
+        _payDevFee(devFeeAmount);
 
         emit TransmuteMinus(msg.sender, to, neutronIn, protonOut, feeWad, decayedVolumePlusBase, newVolume);
     }
