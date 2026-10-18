@@ -99,7 +99,7 @@ contract TransmutationMinimumOutputTest is Test {
         uint256 amount = bound(uint256(amountRaw), 1e12, 2e18);
         uint256 quoted = _quote(plus, amount);
         bytes32 beforeBalances = _balances();
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
+        vm.expectRevert(StableCoinReactor.ExcessiveSlippage.selector);
         _trade(plus, amount, quoted + 1, user);
         assertEq(_balances(), beforeBalances);
         (uint256 output,) = _trade(plus, amount, quoted, user);
@@ -124,7 +124,7 @@ contract TransmutationMinimumOutputTest is Test {
         assertLt(lowerQuote, quoted);
         bytes32 beforeBalances = _balances();
         uint256 snapshot = vm.snapshotState();
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
+        vm.expectRevert(StableCoinReactor.ExcessiveSlippage.selector);
         _trade(plus, WAD, quoted, user);
         assertEq(_balances(), beforeBalances);
         (uint256 output, uint256 fee) = _trade(plus, WAD, lowerQuote, user);
@@ -140,7 +140,7 @@ contract TransmutationMinimumOutputTest is Test {
         oracle.setValue(0);
         bytes32 beforeBalances = _balances();
         for (uint256 i; i < 2; ++i) {
-            vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
+            vm.expectRevert(StableCoinReactor.ExcessiveSlippage.selector);
             _trade(i == 0, WAD, 1, user);
             (uint256 output, uint256 fee) = _trade(i == 0, WAD, 0, user);
             assertEq(output, 0);
@@ -157,7 +157,7 @@ contract TransmutationMinimumOutputTest is Test {
         assertEq(reactor.protonPriceInBase(), 0);
         bytes32 beforeBalances = _balances();
         for (uint256 i; i < 2; ++i) {
-            vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
+            vm.expectRevert(StableCoinReactor.ExcessiveSlippage.selector);
             _trade(i == 0, WAD, 1, user);
             (uint256 output, uint256 fee) = _trade(i == 0, WAD, 0, user);
             assertEq(output, 0);

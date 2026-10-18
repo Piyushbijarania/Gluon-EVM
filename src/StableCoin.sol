@@ -46,6 +46,7 @@ contract StableCoinReactor is ReentrancyGuard {
     error InvalidDecay();
     error AmountZero();
     error AmountTooSmall();
+    error ExcessiveSlippage();
     error EmptyReserve();
     error EmptySupply();
     error InvalidInitialReserve();
@@ -553,7 +554,7 @@ contract StableCoinReactor is ReentrancyGuard {
 
         uint256 basePrice = _readAndCacheBasePrice();
         if (basePrice == 0) {
-            if (minNeutronOut != 0) revert AmountTooSmall();
+            if (minNeutronOut != 0) revert ExcessiveSlippage();
             return (0, 0);
         }
 
@@ -564,7 +565,7 @@ contract StableCoinReactor is ReentrancyGuard {
             _pricesInBase(normalizedReserve, protonSupplyCached, neutronSupplyCached, basePrice);
 
         if (protonPriceBase == 0 || neutronPriceBase == 0) {
-            if (minNeutronOut != 0) revert AmountTooSmall();
+            if (minNeutronOut != 0) revert ExcessiveSlippage();
             return (0, 0);
         }
 
@@ -575,7 +576,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 devFeeAmount = Math.mulDiv(devFeeBaseWad, BASE_TOKEN_UNIT, WAD);
 
         neutronOut = Math.mulDiv(netBase, WAD, neutronPriceBase);
-        if (neutronOut == 0 || neutronOut < minNeutronOut) revert AmountTooSmall();
+        if (neutronOut < minNeutronOut) revert ExcessiveSlippage();
+        if (neutronOut == 0) revert AmountTooSmall();
 
         if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
         uint256 resultingNeutronSupply = neutronSupplyCached + neutronOut;
@@ -613,7 +615,7 @@ contract StableCoinReactor is ReentrancyGuard {
 
         uint256 basePrice = _readAndCacheBasePrice();
         if (basePrice == 0) {
-            if (minProtonOut != 0) revert AmountTooSmall();
+            if (minProtonOut != 0) revert ExcessiveSlippage();
             return (0, 0);
         }
 
@@ -624,7 +626,7 @@ contract StableCoinReactor is ReentrancyGuard {
             _pricesInBase(normalizedReserve, protonSupplyCached, neutronSupplyCached, basePrice);
 
         if (protonPriceBase == 0 || neutronPriceBase == 0) {
-            if (minProtonOut != 0) revert AmountTooSmall();
+            if (minProtonOut != 0) revert ExcessiveSlippage();
             return (0, 0);
         }
 
@@ -636,7 +638,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 devFeeAmount = Math.mulDiv(devFeeBaseWad, BASE_TOKEN_UNIT, WAD);
 
         protonOut = Math.mulDiv(netBase, WAD, protonPriceBase);
-        if (protonOut == 0 || protonOut < minProtonOut) revert AmountTooSmall();
+        if (protonOut < minProtonOut) revert ExcessiveSlippage();
+        if (protonOut == 0) revert AmountTooSmall();
 
         uint256 newVolume = decayedVolumeMinusBase + grossBase;
 

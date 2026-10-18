@@ -586,7 +586,7 @@ function transmuteNeutronToProton(
 
 Burns Neutron and mints the corresponding Proton amount after applying the beta fee.
 
-Both transmutations revert with `AmountTooSmall` if the minted amount is below
+Both transmutations revert with `ExcessiveSlippage` if the minted amount is below
 the caller's minimum, before burning input tokens or paying dev fees. Minimums use
 raw output-token units and apply after both fees. Passing zero opts out of the
 minimum; the existing zero-output check still applies. A zero-price no-op remains
