@@ -45,7 +45,6 @@ contract StableCoinReactor is ReentrancyGuard {
     error InvalidPhi();
     error InvalidDecay();
     error AmountZero();
-    error AmountTooSmall();
     error ExcessiveSlippage();
     error EmptyReserve();
     error EmptySupply();
@@ -296,11 +295,11 @@ contract StableCoinReactor is ReentrancyGuard {
         }
     }
 
-    function _normalizedTargetPriceInBase(uint256 basePrice) internal view returns (uint256) {
+    function _normalizedTargetPriceInBase(uint256 basePrice, Math.Rounding rounding) internal view returns (uint256) {
         if (basePrice == 0) return type(uint256).max;
 
-        uint256 targetPriceBase = Math.mulDiv(PEGGED_ASSET_WAD, WAD, basePrice);
-        return Math.mulDiv(targetPriceBase, pegFactor, PEG_FACTOR_SCALE);
+        // PEGGED_ASSET_WAD * WAD == PEG_FACTOR_SCALE; cancel before dividing.
+        return rounding == Math.Rounding.Ceil ? Math.ceilDiv(pegFactor, basePrice) : pegFactor / basePrice;
     }
 
     function _reserveRatioWad(uint256 normalizedReserve, uint256 neutronSupplyTokens, uint256 basePrice)
@@ -312,10 +311,22 @@ contract StableCoinReactor is ReentrancyGuard {
         if (neutronSupplyTokens == 0) return type(uint256).max;
         if (basePrice == 0) return 0;
 
-        uint256 adjustedNeutronSupply = Math.mulDiv(neutronSupplyTokens, pegFactor, PEG_FACTOR_SCALE);
-        if (adjustedNeutronSupply == 0) return type(uint256).max;
+        // Retain the remainder instead of rounding adjusted supply first.
+        (uint256 high,) = Math.mul512(normalizedReserve, basePrice);
+        if (high >= neutronSupplyTokens) return type(uint256).max;
+        uint256 whole = Math.mulDiv(normalizedReserve, basePrice, neutronSupplyTokens);
 
-        return Math.mulDiv(normalizedReserve, basePrice, adjustedNeutronSupply);
+        (high,) = Math.mul512(whole, PEG_FACTOR_SCALE);
+        if (high >= pegFactor) return type(uint256).max;
+        uint256 ratio = Math.mulDiv(whole, PEG_FACTOR_SCALE, pegFactor);
+
+        uint256 scaledRemainder = Math.mulDiv(
+            mulmod(normalizedReserve, basePrice, neutronSupplyTokens), PEG_FACTOR_SCALE, neutronSupplyTokens
+        );
+        ratio = Math.saturatingAdd(ratio, scaledRemainder / pegFactor);
+        uint256 carry = mulmod(whole, PEG_FACTOR_SCALE, pegFactor) >= pegFactor - scaledRemainder % pegFactor ? 1 : 0;
+
+        return Math.saturatingAdd(ratio, carry);
     }
 
     function _requireOperatingRange(uint256 reserveRatio) internal view {
@@ -334,22 +345,22 @@ contract StableCoinReactor is ReentrancyGuard {
 
     function neutronPriceInBase() public view returns (uint256) {
         uint256 basePrice = getBasePriceInPeggedAsset();
-        return _neutronPriceInBase(_normalizedReserve(), NEUTRON_TOKEN.totalSupply(), basePrice);
+        return _neutronPriceInBase(_normalizedReserve(), NEUTRON_TOKEN.totalSupply(), basePrice, Math.Rounding.Floor);
     }
 
     function protonPriceInBase() public view returns (uint256) {
         uint256 basePrice = getBasePriceInPeggedAsset();
         uint256 normalizedReserve = _normalizedReserve();
         uint256 neutronSupply = NEUTRON_TOKEN.totalSupply();
-        (, uint256 protonPriceBase) =
-            _pricesInBase(normalizedReserve, PROTON_TOKEN.totalSupply(), neutronSupply, basePrice);
-
-        return protonPriceBase;
+        return _protonPriceInBase(
+            normalizedReserve, PROTON_TOKEN.totalSupply(), neutronSupply, basePrice, Math.Rounding.Floor
+        );
     }
 
     function neutronPriceInPeggedAsset() external view returns (uint256) {
         uint256 basePrice = getBasePriceInPeggedAsset();
-        uint256 neutronBase = _neutronPriceInBase(_normalizedReserve(), NEUTRON_TOKEN.totalSupply(), basePrice);
+        uint256 neutronBase =
+            _neutronPriceInBase(_normalizedReserve(), NEUTRON_TOKEN.totalSupply(), basePrice, Math.Rounding.Floor);
         return Math.mulDiv(neutronBase, basePrice, WAD);
     }
 
@@ -357,7 +368,9 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 basePrice = getBasePriceInPeggedAsset();
         uint256 normalizedReserve = _normalizedReserve();
         uint256 neutronSupply = NEUTRON_TOKEN.totalSupply();
-        (, uint256 protonBase) = _pricesInBase(normalizedReserve, PROTON_TOKEN.totalSupply(), neutronSupply, basePrice);
+        uint256 protonBase = _protonPriceInBase(
+            normalizedReserve, PROTON_TOKEN.totalSupply(), neutronSupply, basePrice, Math.Rounding.Floor
+        );
 
         return Math.mulDiv(protonBase, basePrice, WAD);
     }
@@ -414,13 +427,12 @@ contract StableCoinReactor is ReentrancyGuard {
         returns (uint256 neutronOut, uint256 protonOut)
     {
         uint256 protonSupplyBefore = PROTON_TOKEN.totalSupply();
+        uint256 neutronSupplyBefore = NEUTRON_TOKEN.totalSupply();
 
-        // adjustPeg() is not nonReentrant, so a hook-bearing base token could change pegFactor
-        // during the transfer below. Keep the mint calculation on one pre-transfer pegFactor snapshot.
-        uint256 pegFactorBefore = pegFactor;
-        uint256 neutronPriceBase;
+        // Snapshot the bootstrap price before a token hook can call adjustPeg().
+        uint256 adjustedBasePrice;
         if (protonSupplyBefore == 0) {
-            neutronPriceBase = _normalizedTargetPriceInBase(basePrice);
+            adjustedBasePrice = Math.mulDiv(basePrice, PEG_FACTOR_SCALE, pegFactor);
         }
 
         // ERC-20 boundary. reserveBaseline, received and fee are in the token's native units:
@@ -436,17 +448,14 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 net = _baseToWad(netAmount);
         uint256 reserveBefore = _baseToWad(reserveBaseline);
 
-        uint256 adjustedBasePrice = Math.mulDiv(basePrice, PEG_FACTOR_SCALE, pegFactorBefore);
-        neutronOut = Math.mulDiv(net, adjustedBasePrice, reserveRatio);
-
         if (protonSupplyBefore == 0) {
-            uint256 neutronLiability = Math.mulDiv(neutronOut, neutronPriceBase, WAD);
-            protonOut = net - neutronLiability;
+            neutronOut = Math.mulDiv(net, adjustedBasePrice, reserveRatio);
+            protonOut = Math.mulDiv(net, reserveRatio - WAD, reserveRatio);
         } else {
+            // Mint proportional claims without a rounded price or ratio intermediate.
+            neutronOut = Math.mulDiv(net, neutronSupplyBefore, reserveBefore);
             protonOut = Math.mulDiv(net, protonSupplyBefore, reserveBefore);
         }
-
-        if (neutronOut == 0 && protonOut == 0) revert AmountTooSmall();
 
         NEUTRON_TOKEN.mint(to, neutronOut);
         PROTON_TOKEN.mint(to, protonOut);
@@ -471,9 +480,8 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 reserveRatio = _reserveRatioWad(normalizedReserve, neutronSupplyTotal, basePrice);
         _requireOperatingRange(reserveRatio);
 
-        uint256 nBurn = Math.mulDiv(baseOut, neutronSupplyTotal, normalizedReserve);
-        uint256 pBurn = Math.mulDiv(baseOut, protonSupplyTotal, normalizedReserve);
-        if (nBurn == 0 || pBurn == 0) revert AmountTooSmall();
+        uint256 nBurn = Math.mulDiv(baseOut, neutronSupplyTotal, normalizedReserve, Math.Rounding.Ceil);
+        uint256 pBurn = Math.mulDiv(baseOut, protonSupplyTotal, normalizedReserve, Math.Rounding.Ceil);
 
         NEUTRON_TOKEN.burn(msg.sender, nBurn);
         PROTON_TOKEN.burn(msg.sender, pBurn);
@@ -491,9 +499,10 @@ contract StableCoinReactor is ReentrancyGuard {
         view
         returns (uint256 net, uint256 feeAmount, uint256 devFeeAmount)
     {
-        feeAmount = Math.mulDiv(amount, feeWad, WAD);
+        // Round the user's net down and retain the remainder in the reserve.
+        net = Math.mulDiv(amount, WAD - feeWad - devFee, WAD);
         devFeeAmount = Math.mulDiv(amount, devFee, WAD);
-        net = amount - feeAmount - devFeeAmount;
+        feeAmount = amount - net - devFeeAmount;
     }
 
     function _rpow(uint256 x, uint256 n) internal pure returns (uint256 z) {
@@ -538,7 +547,8 @@ contract StableCoinReactor is ReentrancyGuard {
     function _betaFeeWad(uint256 normalizedReserve, uint256 volume) internal view returns (uint256) {
         // Above reserve * WAD, any nonzero betaPhi1 already gives a capped fee.
         uint256 boundedVolume = Math.min(volume, Math.saturatingMul(normalizedReserve, WAD));
-        uint256 volumeFee = normalizedReserve == 0 ? 0 : Math.mulDiv(betaPhi1, boundedVolume, normalizedReserve);
+        uint256 volumeFee =
+            normalizedReserve == 0 ? 0 : Math.mulDiv(betaPhi1, boundedVolume, normalizedReserve, Math.Rounding.Ceil);
         return Math.min(betaPhi0 + volumeFee, WAD);
     }
 
@@ -569,6 +579,8 @@ contract StableCoinReactor is ReentrancyGuard {
             return (0, 0);
         }
 
+        // Preserve the zero-price no-op above; price minted Neutrons up.
+        neutronPriceBase = _neutronPriceInBase(normalizedReserve, neutronSupplyCached, basePrice, Math.Rounding.Ceil);
         uint256 grossBase = Math.mulDiv(protonIn, protonPriceBase, WAD);
         _decayLedger();
         feeWad = _betaPlusFeeWad(normalizedReserve);
@@ -577,7 +589,6 @@ contract StableCoinReactor is ReentrancyGuard {
 
         neutronOut = Math.mulDiv(netBase, WAD, neutronPriceBase);
         if (neutronOut < minNeutronOut) revert ExcessiveSlippage();
-        if (neutronOut == 0) revert AmountTooSmall();
 
         if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
         uint256 resultingNeutronSupply = neutronSupplyCached + neutronOut;
@@ -630,6 +641,9 @@ contract StableCoinReactor is ReentrancyGuard {
             return (0, 0);
         }
 
+        protonPriceBase = _protonPriceInBase(
+            normalizedReserve, protonSupplyCached, neutronSupplyCached, basePrice, Math.Rounding.Ceil
+        );
         uint256 grossBase = Math.mulDiv(neutronIn, neutronPriceBase, WAD);
 
         _decayLedger();
@@ -639,7 +653,6 @@ contract StableCoinReactor is ReentrancyGuard {
 
         protonOut = Math.mulDiv(netBase, WAD, protonPriceBase);
         if (protonOut < minProtonOut) revert ExcessiveSlippage();
-        if (protonOut == 0) revert AmountTooSmall();
 
         uint256 newVolume = decayedVolumeMinusBase + grossBase;
 
@@ -653,18 +666,21 @@ contract StableCoinReactor is ReentrancyGuard {
         );
     }
 
-    function _neutronPriceInBase(uint256 normalizedReserve, uint256 neutronSupplyTokens, uint256 basePrice)
-        internal
-        view
-        returns (uint256)
-    {
+    function _neutronPriceInBase(
+        uint256 normalizedReserve,
+        uint256 neutronSupplyTokens,
+        uint256 basePrice,
+        Math.Rounding rounding
+    ) internal view returns (uint256) {
         if (normalizedReserve == 0) return 0;
-        if (neutronSupplyTokens == 0) return _normalizedTargetPriceInBase(basePrice);
+        if (neutronSupplyTokens == 0) {
+            return _normalizedTargetPriceInBase(basePrice, rounding);
+        }
 
-        uint256 targetPriceBase = _normalizedTargetPriceInBase(basePrice);
-        uint256 reservePerNeutron = Math.mulDiv(normalizedReserve, WAD, neutronSupplyTokens);
+        uint256 targetPriceBase = _normalizedTargetPriceInBase(basePrice, rounding);
+        uint256 reservePerNeutron = Math.mulDiv(normalizedReserve, WAD, neutronSupplyTokens, rounding);
 
-        return targetPriceBase < reservePerNeutron ? targetPriceBase : reservePerNeutron;
+        return Math.min(targetPriceBase, reservePerNeutron);
     }
 
     function _pricesInBase(
@@ -673,23 +689,51 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronSupplyTokens,
         uint256 basePrice
     ) internal view returns (uint256 neutronPriceBase, uint256 protonPriceBase) {
-        neutronPriceBase = _neutronPriceInBase(normalizedReserve, neutronSupplyTokens, basePrice);
-        protonPriceBase =
-            _protonPriceInBase(normalizedReserve, protonSupplyTokens, neutronSupplyTokens, neutronPriceBase);
+        neutronPriceBase = _neutronPriceInBase(normalizedReserve, neutronSupplyTokens, basePrice, Math.Rounding.Floor);
+        protonPriceBase = _protonPriceInBase(
+            normalizedReserve, protonSupplyTokens, neutronSupplyTokens, basePrice, Math.Rounding.Floor
+        );
     }
 
     function _protonPriceInBase(
         uint256 normalizedReserve,
         uint256 protonSupplyTokens,
         uint256 neutronSupplyTokens,
-        uint256 neutronPriceBase
-    ) internal pure returns (uint256) {
+        uint256 basePrice,
+        Math.Rounding rounding
+    ) internal view returns (uint256) {
         if (protonSupplyTokens == 0) return WAD;
-        if (normalizedReserve == 0) return 0;
+        if (normalizedReserve == 0 || basePrice == 0) return 0;
 
-        uint256 liabilities = Math.mulDiv(neutronSupplyTokens, neutronPriceBase, WAD);
+        // Liability rounding is opposite to the desired Proton valuation.
+        Math.Rounding liabilityRounding = rounding == Math.Rounding.Floor ? Math.Rounding.Ceil : Math.Rounding.Floor;
+
+        (bool fits, uint256 denominator) = Math.tryMul(basePrice, WAD);
+        uint256 liabilities;
+        if (fits) {
+            (uint256 high,) = Math.mul512(neutronSupplyTokens, pegFactor);
+            // An unrepresentable liability exceeds every possible reserve.
+            if (high >= denominator) return 0;
+
+            liabilities = Math.mulDiv(neutronSupplyTokens, pegFactor, denominator);
+            // Only round up while equity remains; this also avoids overflowing at uint256.max.
+            if (
+                liabilityRounding == Math.Rounding.Ceil && liabilities < normalizedReserve
+                    && mulmod(neutronSupplyTokens, pegFactor, denominator) != 0
+            ) {
+                ++liabilities;
+            }
+        } else {
+            // Here ceil(supply / WAD) <= basePrice, so the quotient always fits.
+            uint256 scaledSupply = liabilityRounding == Math.Rounding.Ceil
+                ? Math.ceilDiv(neutronSupplyTokens, WAD)
+                : neutronSupplyTokens / WAD;
+            liabilities = Math.mulDiv(scaledSupply, pegFactor, basePrice, liabilityRounding);
+        }
+
+        liabilities = Math.min(normalizedReserve, liabilities);
         uint256 equity = normalizedReserve - liabilities;
 
-        return Math.mulDiv(equity, WAD, protonSupplyTokens);
+        return Math.mulDiv(equity, WAD, protonSupplyTokens, rounding);
     }
 }

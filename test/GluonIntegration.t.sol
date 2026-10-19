@@ -310,7 +310,7 @@ contract GluonIntegrationTest is Test {
         assertGt(sixDecimalReactor.PROTON_TOKEN().balanceOf(user), 0, "no proton minted");
     }
 
-    function testFissionRejectsDepositWhenBothOutputsRoundToZero() public {
+    function testFissionAllowsDepositWhenBothOutputsRoundToZero() public {
         address setupUser = makeAddr("tinyFissionSetupUser");
         _fundAndFission(setupUser, 100e18);
         _adjustIntoOperatingRange();
@@ -321,10 +321,12 @@ contract GluonIntegrationTest is Test {
         vm.startPrank(user);
         baseToken.approve(address(reactor), 1);
 
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
         reactor.fission(1, user);
 
         vm.stopPrank();
+        assertEq(reactor.NEUTRON_TOKEN().balanceOf(user), 0);
+        assertEq(reactor.PROTON_TOKEN().balanceOf(user), 0);
+        assertEq(baseToken.balanceOf(user), 0);
     }
 
     function testFissionWithAdapter() public {
@@ -712,18 +714,22 @@ contract GluonIntegrationTest is Test {
         );
     }
 
-    function testFusionRejectsWithdrawalWhenRequiredBurnRoundsToZero() public {
+    function testFusionRoundsRequiredBurnsUpForTinyWithdrawal() public {
         address user = makeAddr("tinyFusionUser");
 
         _fundAndFission(user, 100e18);
         _adjustIntoOperatingRange();
 
+        uint256 nBefore = reactor.NEUTRON_TOKEN().balanceOf(user);
+        uint256 pBefore = reactor.PROTON_TOKEN().balanceOf(user);
         vm.prank(user);
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
         reactor.fusion(1, user);
+        assertEq(nBefore - reactor.NEUTRON_TOKEN().balanceOf(user), 1);
+        assertEq(pBefore - reactor.PROTON_TOKEN().balanceOf(user), 1);
+        assertEq(baseToken.balanceOf(user), 1);
     }
 
-    function testTransmutationsRejectZeroOutputAtFullBetaFee() public {
+    function testTransmutationsAllowZeroOutputAtFullBetaFee() public {
         _prepareInitialReserve();
         reactor = _deployReactorWithCriticalRatio(address(adapter), 15e17, 1e18, 0, 1e18);
         address user = makeAddr("fullBetaFeeUser");
@@ -733,11 +739,14 @@ contract GluonIntegrationTest is Test {
 
         vm.startPrank(user);
 
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
-        reactor.transmuteProtonToNeutron(1e18, 0, user);
-
-        vm.expectRevert(StableCoinReactor.AmountTooSmall.selector);
-        reactor.transmuteNeutronToProton(1e18, 0, user);
+        uint256 nBefore = reactor.NEUTRON_TOKEN().balanceOf(user);
+        uint256 pBefore = reactor.PROTON_TOKEN().balanceOf(user);
+        (uint256 nOut,) = reactor.transmuteProtonToNeutron(1e18, 0, user);
+        (uint256 pOut,) = reactor.transmuteNeutronToProton(1e18, 0, user);
+        assertEq(nOut, 0);
+        assertEq(pOut, 0);
+        assertEq(reactor.NEUTRON_TOKEN().balanceOf(user), nBefore - 1e18);
+        assertEq(reactor.PROTON_TOKEN().balanceOf(user), pBefore - 1e18);
 
         vm.stopPrank();
     }
@@ -1139,9 +1148,7 @@ contract GluonIntegrationTest is Test {
 
         uint256 basePrice = pricedAdapter.readValue();
         uint256 expectedNeutronSeed = (INITIAL_RESERVE * basePrice) / 15e17;
-        uint256 neutronPriceBase = seededReactor.neutronPriceInBase();
-        uint256 neutronLiability = (expectedNeutronSeed * neutronPriceBase) / 1e18;
-        uint256 expectedProtonSeed = INITIAL_RESERVE - neutronLiability;
+        uint256 expectedProtonSeed = INITIAL_RESERVE / 3;
 
         assertEq(seededReactor.NEUTRON_TOKEN().totalSupply(), expectedNeutronSeed, "wrong neutron seed");
         assertEq(seededReactor.PROTON_TOKEN().totalSupply(), expectedProtonSeed, "wrong proton seed");
@@ -1234,7 +1241,7 @@ contract GluonIntegrationTest is Test {
         );
 
         uint256 reserveBefore = feeReactor.reserve();
-        uint256 ratioBefore = feeReactor.reserveRatioPeggedAsset();
+        uint256 neutronSupplyBefore = feeReactor.NEUTRON_TOKEN().totalSupply();
         uint256 protonSupplyBefore = feeReactor.PROTON_TOKEN().totalSupply();
 
         address user = makeAddr("feeTokenFissionUser");
@@ -1243,7 +1250,7 @@ contract GluonIntegrationTest is Test {
         uint256 expectedFee = 9e18;
         uint256 net = received - expectedFee;
 
-        uint256 expectedNeutronOut = Math.mulDiv(net, 1e18, ratioBefore);
+        uint256 expectedNeutronOut = Math.mulDiv(net, neutronSupplyBefore, reserveBefore);
         uint256 expectedProtonOut = net * protonSupplyBefore / reserveBefore;
 
         feeToken.mint(user, amountIn);
