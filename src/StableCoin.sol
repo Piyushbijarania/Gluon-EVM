@@ -46,6 +46,7 @@ contract StableCoinReactor is ReentrancyGuard {
     error InvalidDecay();
     error AmountZero();
     error AmountTooSmall();
+    error ExcessiveSlippage();
     error EmptyReserve();
     error EmptySupply();
     error InvalidInitialReserve();
@@ -541,7 +542,7 @@ contract StableCoinReactor is ReentrancyGuard {
         return Math.min(betaPhi0 + volumeFee, WAD);
     }
 
-    function transmuteProtonToNeutron(uint256 protonIn, address to)
+    function transmuteProtonToNeutron(uint256 protonIn, uint256 minNeutronOut, address to)
         external
         nonReentrant
         returns (uint256 neutronOut, uint256 feeWad)
@@ -552,7 +553,10 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronSupplyCached = NEUTRON_TOKEN.totalSupply();
 
         uint256 basePrice = _readAndCacheBasePrice();
-        if (basePrice == 0) return (0, 0);
+        if (basePrice == 0) {
+            if (minNeutronOut != 0) revert ExcessiveSlippage();
+            return (0, 0);
+        }
 
         uint256 reserveRatio = _reserveRatioWad(normalizedReserve, neutronSupplyCached, basePrice);
         _requireOperatingRange(reserveRatio);
@@ -560,7 +564,10 @@ contract StableCoinReactor is ReentrancyGuard {
         (uint256 neutronPriceBase, uint256 protonPriceBase) =
             _pricesInBase(normalizedReserve, protonSupplyCached, neutronSupplyCached, basePrice);
 
-        if (protonPriceBase == 0 || neutronPriceBase == 0) return (0, 0);
+        if (protonPriceBase == 0 || neutronPriceBase == 0) {
+            if (minNeutronOut != 0) revert ExcessiveSlippage();
+            return (0, 0);
+        }
 
         uint256 grossBase = Math.mulDiv(protonIn, protonPriceBase, WAD);
         _decayLedger();
@@ -569,6 +576,7 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 devFeeAmount = Math.mulDiv(devFeeBaseWad, BASE_TOKEN_UNIT, WAD);
 
         neutronOut = Math.mulDiv(netBase, WAD, neutronPriceBase);
+        if (neutronOut < minNeutronOut) revert ExcessiveSlippage();
         if (neutronOut == 0) revert AmountTooSmall();
 
         if (devFeeAmount > 0) BASE_TOKEN.safeTransfer(devFeeReceiver, devFeeAmount);
@@ -594,7 +602,7 @@ contract StableCoinReactor is ReentrancyGuard {
      * β- : convert NEUTRON_TOKEN -> PROTON_TOKEN
      */
 
-    function transmuteNeutronToProton(uint256 neutronIn, address to)
+    function transmuteNeutronToProton(uint256 neutronIn, uint256 minProtonOut, address to)
         external
         nonReentrant
         returns (uint256 protonOut, uint256 feeWad)
@@ -606,7 +614,10 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 neutronSupplyCached = NEUTRON_TOKEN.totalSupply();
 
         uint256 basePrice = _readAndCacheBasePrice();
-        if (basePrice == 0) return (0, 0);
+        if (basePrice == 0) {
+            if (minProtonOut != 0) revert ExcessiveSlippage();
+            return (0, 0);
+        }
 
         uint256 reserveRatio = _reserveRatioWad(normalizedReserve, neutronSupplyCached, basePrice);
         _requireOperatingRange(reserveRatio);
@@ -614,7 +625,10 @@ contract StableCoinReactor is ReentrancyGuard {
         (uint256 neutronPriceBase, uint256 protonPriceBase) =
             _pricesInBase(normalizedReserve, protonSupplyCached, neutronSupplyCached, basePrice);
 
-        if (protonPriceBase == 0 || neutronPriceBase == 0) return (0, 0);
+        if (protonPriceBase == 0 || neutronPriceBase == 0) {
+            if (minProtonOut != 0) revert ExcessiveSlippage();
+            return (0, 0);
+        }
 
         uint256 grossBase = Math.mulDiv(neutronIn, neutronPriceBase, WAD);
 
@@ -624,6 +638,7 @@ contract StableCoinReactor is ReentrancyGuard {
         uint256 devFeeAmount = Math.mulDiv(devFeeBaseWad, BASE_TOKEN_UNIT, WAD);
 
         protonOut = Math.mulDiv(netBase, WAD, protonPriceBase);
+        if (protonOut < minProtonOut) revert ExcessiveSlippage();
         if (protonOut == 0) revert AmountTooSmall();
 
         uint256 newVolume = decayedVolumeMinusBase + grossBase;
