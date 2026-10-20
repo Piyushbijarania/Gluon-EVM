@@ -705,35 +705,25 @@ contract StableCoinReactor is ReentrancyGuard {
         if (protonSupplyTokens == 0) return WAD;
         if (normalizedReserve == 0 || basePrice == 0) return 0;
 
-        // Liability rounding is opposite to the desired Proton valuation.
-        Math.Rounding liabilityRounding = rounding == Math.Rounding.Floor ? Math.Rounding.Ceil : Math.Rounding.Floor;
-
+        // Round Neutron liabilities opposite to the Proton price.
         (bool fits, uint256 denominator) = Math.tryMul(basePrice, WAD);
-        uint256 liabilities;
-        if (fits) {
-            (uint256 high,) = Math.mul512(neutronSupplyTokens, pegFactor);
-            // An unrepresentable liability exceeds every possible reserve.
-            if (high >= denominator) return 0;
-
-            liabilities = Math.mulDiv(neutronSupplyTokens, pegFactor, denominator);
-            // Only round up while equity remains; this also avoids overflowing at uint256.max.
-            if (
-                liabilityRounding == Math.Rounding.Ceil && liabilities < normalizedReserve
-                    && mulmod(neutronSupplyTokens, pegFactor, denominator) != 0
-            ) {
-                ++liabilities;
-            }
-        } else {
-            // Here ceil(supply / WAD) <= basePrice, so the quotient always fits.
-            uint256 scaledSupply = liabilityRounding == Math.Rounding.Ceil
-                ? Math.ceilDiv(neutronSupplyTokens, WAD)
-                : neutronSupplyTokens / WAD;
-            liabilities = Math.mulDiv(scaledSupply, pegFactor, basePrice, liabilityRounding);
+        if (!fits) {
+            // Scale the supply instead when basePrice * WAD would overflow.
+            neutronSupplyTokens =
+                rounding == Math.Rounding.Floor ? Math.ceilDiv(neutronSupplyTokens, WAD) : neutronSupplyTokens / WAD;
+            denominator = basePrice;
         }
 
-        liabilities = Math.min(normalizedReserve, liabilities);
-        uint256 equity = normalizedReserve - liabilities;
+        // An unrepresentable liability leaves no equity.
+        (uint256 high,) = Math.mul512(neutronSupplyTokens, pegFactor);
+        if (high >= denominator) return 0;
 
-        return Math.mulDiv(equity, WAD, protonSupplyTokens, rounding);
+        uint256 liabilities = Math.mulDiv(neutronSupplyTokens, pegFactor, denominator);
+        if (liabilities >= normalizedReserve) return 0;
+        if (rounding == Math.Rounding.Floor && mulmod(neutronSupplyTokens, pegFactor, denominator) != 0) {
+            ++liabilities;
+        }
+
+        return Math.mulDiv(normalizedReserve - liabilities, WAD, protonSupplyTokens, rounding);
     }
 }
