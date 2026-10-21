@@ -15,9 +15,9 @@ contract StableCoinReactor is ReentrancyGuard {
     using Math for uint256;
 
     uint256 public constant WAD = 1e18;
+    uint256 internal constant Q_STAR_WAD = 99e16;
     uint256 public constant PEGGED_ASSET_WAD = 1e18; // peg target
     uint256 public constant UPPER_RESERVE_RATIO = 2e18;
-    uint256 internal constant INITIAL_RESERVE_RATIO = 15e17;
     // Prices and step coefficients remain WAD; the dimensionless peg factor has 36 decimals.
     uint256 public constant PEG_FACTOR_SCALE = 1e36;
     uint256 public constant PEG_DOWN_FACTOR_WAD = 99e16;
@@ -35,6 +35,7 @@ contract StableCoinReactor is ReentrancyGuard {
     error InvalidFissionFee();
     error InvalidFusionFee();
     error InvalidCriticalReserveRatio();
+    error InvalidInitialReserveRatio();
     error EmptyVaultName();
     error EmptyBaseName();
     error EmptyBaseSymbol();
@@ -176,7 +177,7 @@ contract StableCoinReactor is ReentrancyGuard {
         if (fusionFeeParam >= WAD - devFeeParam) revert InvalidFusionFee();
         if (betaPhi0Param > WAD || betaPhi1Param > WAD) revert InvalidPhi();
         if (decayPerSecondWadParam > WAD) revert InvalidDecay();
-        if (criticalReserveRatioWadParam < WAD || criticalReserveRatioWadParam >= UPPER_RESERVE_RATIO) {
+        if (criticalReserveRatioWadParam <= WAD || criticalReserveRatioWadParam >= UPPER_RESERVE_RATIO) {
             revert InvalidCriticalReserveRatio();
         }
         if (bytes(vaultNameParam).length == 0) revert EmptyVaultName();
@@ -252,19 +253,22 @@ contract StableCoinReactor is ReentrancyGuard {
         return _baseToWad(reserve());
     }
 
-    function initialFission(uint256 amountIn) external nonReentrant {
+    function initialFission(uint256 amountIn, uint256 initialReserveRatioWad) external nonReentrant {
         if (msg.sender != FACTORY) revert OnlyFactory();
         if (NEUTRON_TOKEN.totalSupply() != 0 || PROTON_TOKEN.totalSupply() != 0) revert AlreadyInitialized();
         if (amountIn == 0) revert InvalidInitialReserve();
+        if (initialReserveRatioWad <= CRITICAL_RESERVE_RATIO || initialReserveRatioWad >= UPPER_RESERVE_RATIO) {
+            revert InvalidInitialReserveRatio();
+        }
 
         uint256 basePrice = _readAndCacheBasePrice();
         (uint256 neutronOut, uint256 protonOut) =
-            fissionAux(amountIn, address(this), INITIAL_RESERVE_RATIO, 0, basePrice);
+            fissionAux(amountIn, address(this), initialReserveRatioWad, 0, basePrice);
 
         if (neutronOut == 0 || protonOut == 0) revert InvalidInitialReserve();
 
         uint256 initialReserveRatio = _reserveRatioWad(_normalizedReserve(), neutronOut, basePrice);
-        if (initialReserveRatio < CRITICAL_RESERVE_RATIO || initialReserveRatio > UPPER_RESERVE_RATIO) {
+        if (initialReserveRatio <= CRITICAL_RESERVE_RATIO || initialReserveRatio >= UPPER_RESERVE_RATIO) {
             revert InvalidInitialReserve();
         }
     }
@@ -677,10 +681,12 @@ contract StableCoinReactor is ReentrancyGuard {
             return _normalizedTargetPriceInBase(basePrice, rounding);
         }
 
-        uint256 targetPriceBase = _normalizedTargetPriceInBase(basePrice, rounding);
-        uint256 reservePerNeutron = Math.mulDiv(normalizedReserve, WAD, neutronSupplyTokens, rounding);
-
-        return Math.min(targetPriceBase, reservePerNeutron);
+        return Math.mulDiv(
+            _liabilities(normalizedReserve, neutronSupplyTokens, basePrice, rounding),
+            WAD,
+            neutronSupplyTokens,
+            rounding
+        );
     }
 
     function _pricesInBase(
@@ -703,27 +709,60 @@ contract StableCoinReactor is ReentrancyGuard {
         Math.Rounding rounding
     ) internal view returns (uint256) {
         if (protonSupplyTokens == 0) return WAD;
-        if (normalizedReserve == 0 || basePrice == 0) return 0;
+        return Math.mulDiv(
+            _equity(normalizedReserve, neutronSupplyTokens, basePrice, rounding), WAD, protonSupplyTokens, rounding
+        );
+    }
 
-        // Round Neutron liabilities opposite to the Proton price.
+    /// @dev Gluon Z: L = min(T, R * T / (T + (1 - qStar) * R)), where T is target liabilities.
+    function _liabilities(
+        uint256 normalizedReserve,
+        uint256 neutronSupplyTokens,
+        uint256 basePrice,
+        Math.Rounding rounding
+    ) internal view returns (uint256) {
+        if (neutronSupplyTokens == 0) return 0;
+
         (bool fits, uint256 denominator) = Math.tryMul(basePrice, WAD);
+        uint256 supply = neutronSupplyTokens;
         if (!fits) {
-            // Scale the supply instead when basePrice * WAD would overflow.
-            neutronSupplyTokens =
-                rounding == Math.Rounding.Floor ? Math.ceilDiv(neutronSupplyTokens, WAD) : neutronSupplyTokens / WAD;
+            supply = rounding == Math.Rounding.Ceil ? Math.ceilDiv(supply, WAD) : supply / WAD;
             denominator = basePrice;
         }
+        (uint256 high,) = Math.mul512(supply, pegFactor);
+        uint256 targetLiabilities =
+            high >= denominator ? type(uint256).max : Math.mulDiv(supply, pegFactor, denominator);
+        if (
+            rounding == Math.Rounding.Ceil && targetLiabilities != type(uint256).max
+                && mulmod(supply, pegFactor, denominator) != 0
+        ) ++targetLiabilities;
 
-        // An unrepresentable liability leaves no equity.
-        (uint256 high,) = Math.mul512(neutronSupplyTokens, pegFactor);
-        if (high >= denominator) return 0;
+        if (targetLiabilities <= Math.mulDiv(normalizedReserve, Q_STAR_WAD, WAD)) return targetLiabilities;
 
-        uint256 liabilities = Math.mulDiv(neutronSupplyTokens, pegFactor, denominator);
-        if (liabilities >= normalizedReserve) return 0;
-        if (rounding == Math.Rounding.Floor && mulmod(neutronSupplyTokens, pegFactor, denominator) != 0) {
-            ++liabilities;
+        // R * T / (T + 0.01 * R) = R * 100 / (100 + reserveRatio).
+        // The ratio rounds down; the adjacent integer bounds it above for a lower liability bound.
+        uint256 ratio = _reserveRatioWad(normalizedReserve, neutronSupplyTokens, basePrice);
+        if (rounding == Math.Rounding.Floor && basePrice != 0) ratio = Math.saturatingAdd(ratio, 1);
+        uint256 scale = WAD * WAD / (WAD - Q_STAR_WAD);
+        if (ratio > type(uint256).max - scale) {
+            ratio = rounding == Math.Rounding.Floor ? Math.ceilDiv(ratio, 2) : ratio / 2;
+            scale /= 2;
         }
+        uint256 normalizedLiabilities = Math.mulDiv(normalizedReserve, scale, scale + ratio, rounding);
+        return Math.min(targetLiabilities, normalizedLiabilities);
+    }
 
-        return Math.mulDiv(normalizedReserve - liabilities, WAD, protonSupplyTokens, rounding);
+    function _equity(uint256 normalizedReserve, uint256 neutronSupplyTokens, uint256 basePrice, Math.Rounding rounding)
+        internal
+        view
+        returns (uint256)
+    {
+        return normalizedReserve
+            - _liabilities(
+            normalizedReserve,
+            neutronSupplyTokens,
+            basePrice,
+            rounding == Math.Rounding.Floor ? Math.Rounding.Ceil : Math.Rounding.Floor
+        );
     }
 }

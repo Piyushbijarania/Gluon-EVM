@@ -58,7 +58,7 @@ contract ReserveRoundingTest is Test {
         reactor = new RoundingHarness(address(base), address(oracle), protocolFee, devRate);
         base.mint(address(this), 100 * unit);
         base.approve(address(reactor), 100 * unit);
-        reactor.initialFission(100 * unit);
+        reactor.initialFission(100 * unit, 15e17);
         _deposit(100 * unit);
     }
 
@@ -121,7 +121,7 @@ contract ReserveRoundingTest is Test {
         reactor = new RoundingHarness(address(base), address(oracle), 0, 0);
         base.mint(address(this), 3);
         base.approve(address(reactor), 3);
-        reactor.initialFission(3);
+        reactor.initialFission(3, 15e17);
         _deposit(3);
         assertEq(reactor.NEUTRON_TOKEN().totalSupply(), 4);
         oracle.setValue(2);
@@ -140,7 +140,7 @@ contract ReserveRoundingTest is Test {
         reactor = new RoundingHarness(address(base), address(oracle), 0, 0);
         base.mint(address(this), 3);
         base.approve(address(reactor), 3);
-        reactor.initialFission(3);
+        reactor.initialFission(3, 15e17);
         _deposit(3);
         oracle.setValue(1);
         _recover();
@@ -405,7 +405,7 @@ contract ReserveRoundingTest is Test {
         vm.stopPrank();
     }
 
-    function testPriceCollapseReturnsZeroEquityWithoutOverflow() public {
+    function testUnrepresentablySmallProtonPriceRoundsToZeroWithoutOverflow() public {
         _deploy(18, 1e60, 0, 0);
         oracle.setValue(1);
         assertEq(reactor.protonPriceInBase(), 0);

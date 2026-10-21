@@ -493,12 +493,15 @@ deployments/sepolia.md
 
 Before deployment, the caller approves the factory to transfer `initialReserve`.
 The factory first receives the reserve from the caller, then approves the newly deployed
-reactor to use the amount actually received. The factory calls `initialFission(amountIn)`, which
+reactor to use the amount actually received. The factory calls
+`initialFission(amountIn, initialReserveRatioWad)`, which
 uses the same internal fission path as normal user fission. The resulting Neutron and
 Proton seed supplies are minted to the reactor itself and remain locked as protocol
-backing. Fission and dev fees also apply during this initial fission. Seed issuance
-uses `15e17`; retained fission fees increase the actual initial reserve ratio.
-Initialization rejects a resulting ratio outside the operating range.
+backing. The deployer chooses both the critical ratio and the initial seed-issuance
+ratio, with `1e18 < critical < initial < 2e18`. Fission and dev fees also apply
+during this initial fission. Retained fission fees and rounding can increase the
+actual initial reserve ratio above the chosen issuance ratio. Initialization
+rejects an actual ratio at or below the critical ratio or at or above `2e18`.
 
 A reactor is configured with:
 
@@ -517,6 +520,7 @@ devFee
 fissionFee
 fusionFee
 criticalReserveRatio
+initialReserveRatio
 initialReserve
 betaPhi0
 betaPhi1
@@ -535,7 +539,8 @@ The reactor validates that:
 - each fission or fusion fee plus the dev fee is below `1e18`
 - each beta fee coefficient is at most `1e18`
 - the per-second volume retention multiplier is at most `1e18`
-- the critical reserve ratio is at least `1e18` and below the upper reserve ratio
+- the critical reserve ratio is strictly above `1e18` (100%) and below `2e18` (200%)
+- the chosen initial reserve ratio is strictly above the critical ratio and below `2e18` (200%)
 - the initial reserve is non-zero and can establish a valid initialized reserve state
 - the vault name is not empty
 - the base asset name and symbol are not empty
@@ -617,8 +622,14 @@ proportional claims. Initial locked allocations round down and must remain
 positive.
 
 Transmutations value burned tokens down and minted tokens up, then round the
-output amount down. Proton equity uses the opposite rounding for Neutron
-liabilities. Fixed price scales are cancelled before division, and reserve-ratio
+output amount down. Both prices use shared Gluon Z liabilities and equity, following
+[`Gluon.es`](https://github.com/StabilityNexus/Gluon-Ergo-Contracts/blob/d69bee0acf5dda28e1d014c4a0286dd68c185143/contracts/Gluon.es).
+With target Neutron liabilities `T`, reserve `R` and Ergo's fixed `qStar = 0.99`,
+liabilities are `min(T, R * T / (T + 0.01 * R))`; equity is `R - liabilities`.
+The critical reserve ratio remains a separate operating-range setting.
+Liabilities round opposite to equity, so both prices bound their exact values
+in the requested direction. Integer rounding can still produce a zero price.
+Fixed price scales are cancelled before division, and reserve-ratio
 calculations preserve the division remainder before applying the peg factor.
 
 The user's net amount rounds down; dev payments round down and the remaining
