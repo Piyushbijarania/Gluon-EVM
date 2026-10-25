@@ -129,7 +129,7 @@ contract GluonIntegrationTest is Test {
         mockFeed = new MockFeed(100000000, 8);
         adapter = new ChainlinkToOracleAdapter(address(mockFeed));
 
-        factory = new StableCoinFactory();
+        factory = new StableCoinFactory(dev, 0);
 
         reactor = _deployReactor(address(adapter));
     }
@@ -168,8 +168,6 @@ contract GluonIntegrationTest is Test {
             oracleAddress,
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             criticalReserveRatio,
@@ -195,7 +193,7 @@ contract GluonIntegrationTest is Test {
         returns (MockDecimalERC20 decimalToken, StableCoinReactor decimalReactor)
     {
         decimalToken = new MockDecimalERC20("USD Coin", "USDC", decimals_);
-        StableCoinFactory decimalFactory = new StableCoinFactory();
+        StableCoinFactory decimalFactory = new StableCoinFactory(dev, 0);
 
         decimalToken.mint(address(this), initialReserve);
         decimalToken.approve(address(decimalFactory), initialReserve);
@@ -210,8 +208,6 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -230,7 +226,7 @@ contract GluonIntegrationTest is Test {
         returns (MockDecimalERC20 decimalToken, StableCoinReactor decimalReactor)
     {
         decimalToken = new MockDecimalERC20("USD Coin", "USDC", decimals_);
-        StableCoinFactory decimalFactory = new StableCoinFactory();
+        StableCoinFactory decimalFactory = new StableCoinFactory(dev, 0);
 
         decimalToken.mint(address(this), initialReserve);
         decimalToken.approve(address(decimalFactory), initialReserve);
@@ -245,8 +241,6 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             fissionFee,
             0,
             14e17,
@@ -687,7 +681,7 @@ contract GluonIntegrationTest is Test {
     function testDeploymentRejectsReserveTokenAboveWadPrecision() public {
         MockDecimalERC20 highDecimalToken = new MockDecimalERC20("High Decimal Token", "HDT", 19);
 
-        StableCoinFactory highDecimalFactory = new StableCoinFactory();
+        StableCoinFactory highDecimalFactory = new StableCoinFactory(dev, 0);
 
         uint256 initialReserve = 100e19;
         highDecimalToken.mint(address(this), initialReserve);
@@ -705,8 +699,6 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -881,8 +873,6 @@ contract GluonIntegrationTest is Test {
             address(zeroAdapter),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -923,8 +913,6 @@ contract GluonIntegrationTest is Test {
             address(0),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -969,8 +957,6 @@ contract GluonIntegrationTest is Test {
             eoaOracle,
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -1015,8 +1001,6 @@ contract GluonIntegrationTest is Test {
                 address(adapter),
                 "Gluon Gov",
                 "GOV",
-                dev,
-                0,
                 fissionFee,
                 0,
                 14e17,
@@ -1127,8 +1111,6 @@ contract GluonIntegrationTest is Test {
             address(roundedAdapter),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -1198,8 +1180,6 @@ contract GluonIntegrationTest is Test {
             address(adapter),
             "Gluon Gov",
             "GOV",
-            dev,
-            0,
             0,
             0,
             14e17,
@@ -1231,8 +1211,6 @@ contract GluonIntegrationTest is Test {
                 address(adapter),
                 "Gluon Gov",
                 "GOV",
-                dev,
-                0,
                 1e17,
                 0,
                 14e17,
@@ -1289,8 +1267,6 @@ contract GluonIntegrationTest is Test {
                 address(adapter),
                 "Gluon Gov",
                 "GOV",
-                dev,
-                0,
                 1e17,
                 0,
                 14e17,

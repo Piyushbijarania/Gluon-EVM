@@ -408,7 +408,10 @@ The current deployment script can deploy:
 - `StableCoinFactory`
 - `ChainlinkToOracleAdapter` when `CHAINLINK_FEED` is provided
 
-The `StableCoinFactory` constructor does not require any parameters.
+The `StableCoinFactory` constructor takes `devParam` (the initial dev address) and
+`devFeeParam` (the separate dev fee in WAD units). The deployment script reads
+`GLUON_DEV` and `GLUON_DEV_FEE_WAD`; set the latter to
+`1000000000000000` for Gluon’s 0.1% fee.
 
 The factory has no owner; reactor deployment is permissionless.
 
@@ -429,6 +432,8 @@ export PRIVATE_KEY=YOUR_PRIVATE_KEY
 export SEPOLIA_RPC_URL=YOUR_SEPOLIA_RPC_URL
 export CHAINLINK_FEED=YOUR_CHAINLINK_FEED_ADDRESS
 export ETHERSCAN_API_KEY=YOUR_ETHERSCAN_API_KEY
+export GLUON_DEV=0x86B8f920835015c0F1b697dBe0B8b150a986eCE5
+export GLUON_DEV_FEE_WAD=1000000000000000
 ```
 
 ### Dry Run
@@ -638,10 +643,12 @@ its existing cap. Separate counter decay, peg-adjustment step rounding and
 intentional zero-price no-ops are unchanged. Public price views report the lower
 valuation; contract simulation remains authoritative for executable quotes.
 
-For Gluon deployments, pass the initial dev address
-`0x86B8f920835015c0F1b697dBe0B8b150a986eCE5`. The constructor initializes both
-`dev` and `devFeeReceiver` to that address. The WebUI supplies a fixed
-`devFee` of `1e15`, representing 0.1%.
+For Gluon factory deployments, use the initial dev address
+`0x86B8f920835015c0F1b697dBe0B8b150a986eCE5` and `devFee` of `1e15` (0.1%).
+These factory settings are immutable. Public `deployReactor` calls do not accept
+dev settings: each new reactor receives the factory’s dev address for both its
+initial `dev` and `devFeeReceiver`, and snapshots its fee rate. Reactor-local role
+transfers and receiver changes do not change the factory or later reactors.
 
 Only `dev` can call `setDevFeeReceiver(newReceiver)`, which rejects zero addresses.
 To transfer the dev role, the current dev calls `proposeDev(newDev)` and the nominee
