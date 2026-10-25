@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
+// Licensing information: https://github.com/StabilityNexus/Gluon-EVM
 pragma solidity ^0.8.20;
 
 // org-wide oracle interface

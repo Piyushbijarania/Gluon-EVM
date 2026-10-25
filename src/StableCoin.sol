@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: AEL
+// SPDX-License-Identifier: UNLICENSED
+// Licensing information: https://github.com/StabilityNexus/Gluon-EVM
 pragma solidity ^0.8.20;
 
 import {Tokeon} from "./tokens/Tokeon.sol";
